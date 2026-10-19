@@ -47,6 +47,7 @@ private:
     void drawHUD();
     void drawLeaves(float alpha);
     void drawSky();
+    void drawLogoImage(float x, float y, float w, float a);
     void drawPanel(float x, float y, float w, float h, float a);
     bool button(float x, float y, float w, float h, const char* label, bool primary, float alpha);
     int segmented(float x, float y, float w, float h, const char* const* labels, int n, int sel);

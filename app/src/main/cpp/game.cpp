@@ -481,6 +481,13 @@ void Game::drawLeaves(float alpha) {
     }
 }
 
+void Game::drawLogoImage(float x, float y, float w, float a) {
+    float lh = w * (float)logoH_ / (float)std::max(1, logoW_);
+    rend_.uiSprite(texLogo_, x, y, w, lh, 1, 1, 1, a, 0, 0, 1, 1);
+    float th = w * 0.075f;
+    rend_.uiText("NATURE GAME", x + w * 0.5f, y + lh * 0.64f - th * 0.5f, th, 0.36f, 0.20f, 0.07f, a, 1, false);
+}
+
 void Game::drawSky() {
     const int bands = 14;
     float bh = (float)H_ / (float)bands + 1.f;
@@ -514,15 +521,15 @@ void Game::drawSplash(float dt) {
     float fadeIn = clampf(screenT_ / 0.6f, 0.f, 1.f);
     float cx = W * 0.5f, cy = H * 0.34f;
     if (texLogo_) {
-        float lw = std::min(W * 0.62f, 900.f * u_) * (0.7f + 0.3f * a), lh = lw * (float)logoH_ / (float)std::max(1, logoW_);
-        rend_.uiSprite(texLogo_, cx - lw * 0.5f, cy - lh * 0.5f, lw, lh, 1, 1, 1, fadeIn, 0, 0, 1, 1);
+        float lw = std::min(W * 0.5f, 820.f * u_) * (0.7f + 0.3f * a), lh = lw * (float)logoH_ / (float)std::max(1, logoW_);
+        drawLogoImage(cx - lw * 0.5f, cy - lh * 0.5f, lw, fadeIn);
     } else {
         float th = 150.f * u_ * (0.6f + 0.4f * a);
         rend_.uiText("NATURE", cx, cy - th * 1.0f, th, 1.0f, 0.97f, 0.86f, fadeIn, 1);
         rend_.uiText("GAME", cx, cy + th * 0.05f, th, 1.0f, 0.78f, 0.25f, fadeIn, 1);
     }
     float sub = clampf((screenT_ - 0.9f) / 0.6f, 0.f, 1.f);
-    rend_.uiText("EXPLORE THE WILD", cx, H * 0.60f, 38.f * u_, 1.f, 1.f, 1.f, sub * 0.95f, 1);
+    rend_.uiText("EXPLORE THE WILD", cx, H * 0.66f, 38.f * u_, 1.f, 1.f, 1.f, sub * 0.95f, 1);
 
     float bw = 640.f * u_, bh = 20.f * u_;
     float bx = (W - bw) * 0.5f, by = H * 0.86f;
@@ -593,8 +600,8 @@ void Game::drawMenu() {
     float bob = std::sin(time_ * 1.2f) * 6.f * u_;
     float x0 = 120.f * u_;
     if (texLogo_) {
-        float lw = std::min(W * 0.46f, 800.f * u_), lh = lw * (float)logoH_ / (float)std::max(1, logoW_);
-        rend_.uiSprite(texLogo_, x0, H * 0.08f + bob, lw * (0.8f + 0.2f * tIn), lh * (0.8f + 0.2f * tIn), 1, 1, 1, clampf(screenT_ / 0.5f, 0.f, 1.f), 0, 0, 1, 1);
+        float lw = std::min(W * 0.40f, 700.f * u_) * (0.8f + 0.2f * tIn);
+        drawLogoImage(x0, H * 0.04f + bob, lw, clampf(screenT_ / 0.5f, 0.f, 1.f));
     } else {
         float th = 130.f * u_;
         float al = clampf(screenT_ / 0.5f, 0.f, 1.f);
@@ -660,11 +667,11 @@ void Game::drawPause() {
     float W = (float)W_, H = (float)H_;
     float pp = easeOutCubic(screenT_ / 0.25f);
     rend_.uiShape(2, 0, 0, W, H, 0.02f, 0.05f, 0.04f, 0.5f * pp, 0.f);
-    float pw = 640.f * u_, ph = 640.f * u_;
+    float pw = 1000.f * u_, ph = 640.f * u_;
     float px = (W - pw) * 0.5f, py = (H - ph) * 0.5f + (1.f - pp) * 50.f * u_;
     drawPanel(px, py, pw, ph, pp);
     rend_.uiText("PAUSED", px + pw * 0.5f, py + 34.f * u_, 60.f * u_, kCream[0], kCream[1], kCream[2], pp, 1);
-    float bw = pw - 120.f * u_, bh = 110.f * u_, bx = px + 60.f * u_, y = py + 150.f * u_;
+    float bw = pw - 380.f * u_, bh = 110.f * u_, bx = px + 190.f * u_, y = py + 150.f * u_;
     if (button(bx, y, bw, bh, "RESUME", true, pp)) { screen_ = S_PLAY; screenT_ = 0; clearTouches(); return; }
     y += bh + 24.f * u_;
     if (button(bx, y, bw, bh, "SETTINGS", false, pp)) { settingsFrom_ = S_PAUSE; screen_ = S_SETTINGS; screenT_ = 0; clearTouches(); return; }
