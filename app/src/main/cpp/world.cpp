@@ -427,7 +427,7 @@ void buildDetail(const World& w, const ModelIds& id, int cx, int cz, DetailCPU& 
             float fn = fbm(x * 0.03f + 7.f, z * 0.03f, 2, seed + 707);
             float y = w.height(x, z);
             if (fn > 0.12f && r.f() < 0.55f) {
-                push(id.flowers[r.u() % 4], x, y - 0.02f, z, r.range(0.7f, 1.25f), r.range(0.f, 6.2831853f), packTint(1, 1, 1), 0, r);
+                push(id.flowers[r.u() % 4], x, y - 0.02f, z, r.range(0.7f, 1.25f), r.range(0.f, 6.2831853f), packTint(0.40f, 0.76f, 0.16f), 0, r);
             } else if (r.f() < 0.07f) {
                 push(id.clover[r.u() % 2], x, y - 0.02f, z, r.range(0.8f, 1.4f), r.range(0.f, 6.2831853f), packTint(0.55f, 0.85f, 0.2f), 0, r);
             }

@@ -24,6 +24,7 @@ uniform mat4 uVP;
 uniform mat4 uLightVP;
 uniform float uTime;
 uniform float uSway;
+uniform float uAOMin;
 out vec2 vUV;
 out vec3 vN;
 out float vAO;
@@ -44,7 +45,7 @@ void main(){
   w.z += cos(uTime*1.2 + ph*1.4) * amp * 0.7;
   vUV = aUV;
   vN = n;
-  vAO = mix(0.45, 1.0, aCol.r);
+  vAO = mix(uAOMin, 1.0, aCol.r);
   vTint = iTint.rgb;
   vW = w;
   vSh = (uLightVP * vec4(w, 1.0)).xyz;
@@ -64,6 +65,7 @@ uniform sampler2D uTex;
 uniform sampler2DShadow uShadow;
 uniform int uMask;
 uniform float uTintBoost;
+uniform float uSoft;
 uniform vec3 uSunDir;
 uniform vec3 uSunCol;
 uniform vec3 uAmbTop;
@@ -84,9 +86,11 @@ void main(){
   }
   vec3 n = normalize(vN);
   if (!gl_FrontFacing) n = -n;
+  n = normalize(mix(n, vec3(0.0, 1.0, 0.0), uSoft));
+  vec3 V = normalize(uCam - vW);
   float ndl = dot(n, uSunDir);
   float wrap = ndl * 0.5 + 0.5;
-  float toon = mix(wrap, smoothstep(0.30, 0.62, wrap), 0.55);
+  float toon = mix(wrap, smoothstep(0.22, 0.78, wrap), 0.45);
   float sh = 1.0;
   if (uShadowOn == 1 && ndl > -0.1) {
     float z = vSh.z - 0.0022;
@@ -96,11 +100,16 @@ void main(){
     vec2 e = abs(vSh.xy - 0.5) * 2.0;
     float edge = smoothstep(0.80, 1.0, max(e.x, e.y));
     sh = mix(sh, 1.0, edge);
-    sh = mix(0.45, 1.0, sh);
+    sh = mix(0.50, 1.0, sh);
   }
   vec3 amb = mix(uAmbBot, uAmbTop, n.y * 0.5 + 0.5);
   vec3 lit = (amb + uSunCol * toon * sh) * vAO;
   vec3 col = base * lit;
+  float tr = pow(clamp(dot(V, -uSunDir), 0.0, 1.0), 3.0) * uSoft;
+  col += base * uSunCol * tr * 0.55 * sh;
+  col = 1.0 - exp(-col * 1.75);
+  float lum = dot(col, vec3(0.299, 0.587, 0.114));
+  col = clamp(mix(vec3(lum), col, 1.18), 0.0, 1.0);
   float d = length(vW - uCam);
   float f = 1.0 - exp(-d * d * uFogK * uFogK);
   col = mix(col, uFogCol, clamp(f, 0.0, 1.0));
@@ -164,14 +173,14 @@ float vn(vec2 p){
 }
 void main(){
   float n = vn(vW.xz * 0.7) * 0.6 + vn(vW.xz * 2.9) * 0.4;
-  vec3 base = vCol.rgb * (0.82 + 0.36 * n);
+  vec3 base = vCol.rgb * (0.90 + 0.22 * n);
   float pm = smoothstep(0.32, 0.62, vCol.a + (n - 0.5) * 0.35);
   vec3 dirt = mix(vec3(0.62, 0.48, 0.26), vec3(0.78, 0.62, 0.36), n);
   base = mix(base, dirt, pm);
   vec3 nn = normalize(vN);
   float ndl = dot(nn, uSunDir);
   float wrap = ndl * 0.5 + 0.5;
-  float toon = mix(wrap, smoothstep(0.30, 0.62, wrap), 0.55);
+  float toon = mix(wrap, smoothstep(0.22, 0.78, wrap), 0.45);
   float sh = 1.0;
   if (uShadowOn == 1) {
     float z = vSh.z - 0.0030;
@@ -185,6 +194,9 @@ void main(){
   }
   vec3 amb = mix(uAmbBot, uAmbTop, nn.y * 0.5 + 0.5);
   vec3 col = base * (amb + uSunCol * toon * sh);
+  col = 1.0 - exp(-col * 1.75);
+  float lum = dot(col, vec3(0.299, 0.587, 0.114));
+  col = clamp(mix(vec3(lum), col, 1.18), 0.0, 1.0);
   float d = length(vW - uCam);
   float f = 1.0 - exp(-d * d * uFogK * uFogK);
   col = mix(col, uFogCol, clamp(f, 0.0, 1.0));
@@ -225,8 +237,8 @@ float vn(vec2 p){
 void main(){
   vec3 dir = normalize(uF + uR * (vNdc.x * uTanY * uAspect) + uU * (vNdc.y * uTanY));
   float h = clamp(dir.y, 0.0, 1.0);
-  vec3 zen = vec3(0.26, 0.55, 0.93);
-  vec3 col = mix(uFogCol, zen, pow(h, 0.50));
+  vec3 zen = vec3(0.36, 0.62, 0.95);
+  vec3 col = mix(uFogCol, zen, pow(h, 0.46));
   float sd = max(dot(dir, uSunDir), 0.0);
   col += vec3(1.0, 0.86, 0.58) * (pow(sd, 90.0) * 0.55 + pow(sd, 7.0) * 0.14);
   if (uClouds > 0 && dir.y > 0.01) {
@@ -261,6 +273,8 @@ in vec2 vUV;
 uniform vec4 uColor;
 uniform int uShape;
 uniform float uParam;
+uniform vec4 uUV;
+uniform vec2 uSize;
 uniform sampler2D uTex;
 out vec4 oCol;
 void main(){
@@ -276,13 +290,15 @@ void main(){
     float inner = 1.0 - uParam;
     a = (1.0 - smoothstep(1.0 - aa, 1.0, d)) * smoothstep(inner - aa, inner, d);
   } else if (uShape == 2) {
-    vec2 b = vec2(1.0 - uParam);
-    vec2 dd = abs(q) - b;
-    float d = length(max(dd, 0.0)) + min(max(dd.x, dd.y), 0.0) - uParam;
-    float aa = fwidth(d) * 1.2;
+    float r = uParam * min(uSize.x, uSize.y) * 0.5;
+    vec2 pp = q * 0.5 * uSize;
+    vec2 b = 0.5 * uSize - vec2(r);
+    vec2 dd = abs(pp) - b;
+    float d = length(max(dd, 0.0)) + min(max(dd.x, dd.y), 0.0) - r;
+    float aa = max(fwidth(d), 0.001) * 1.1;
     a = 1.0 - smoothstep(-aa, 0.0, d);
   } else if (uShape == 3) {
-    vec4 t = texture(uTex, vUV);
+    vec4 t = texture(uTex, uUV.xy + vUV * uUV.zw);
     oCol = t * uColor;
     return;
   }
@@ -329,10 +345,10 @@ GLuint link(const char* vs, const char* fs) {
 }
 
 const V3 kSunDir = vnorm({0.42f, 0.78f, 0.46f});
-const float kSunCol[3] = {0.66f, 0.60f, 0.46f};
-const float kAmbTop[3] = {0.50f, 0.60f, 0.74f};
-const float kAmbBot[3] = {0.34f, 0.32f, 0.26f};
-const float kFogCol[3] = {0.80f, 0.90f, 0.97f};
+const float kSunCol[3] = {0.78f, 0.68f, 0.50f};
+const float kAmbTop[3] = {0.56f, 0.66f, 0.80f};
+const float kAmbBot[3] = {0.40f, 0.38f, 0.30f};
+const float kFogCol[3] = {0.84f, 0.92f, 0.98f};
 
 }  // namespace
 
@@ -348,7 +364,7 @@ bool Renderer::buildPrograms() {
     props_.uVP = U(p, "uVP"); props_.uLightVP = U(p, "uLightVP"); props_.uTime = U(p, "uTime"); props_.uSway = U(p, "uSway");
     props_.uTex = U(p, "uTex"); props_.uShadow = U(p, "uShadow"); props_.uMask = U(p, "uMask"); props_.uTintBoost = U(p, "uTintBoost");
     props_.uSunDir = U(p, "uSunDir"); props_.uSunCol = U(p, "uSunCol"); props_.uAmbTop = U(p, "uAmbTop"); props_.uAmbBot = U(p, "uAmbBot");
-    props_.uFogCol = U(p, "uFogCol"); props_.uCam = U(p, "uCam"); props_.uFogK = U(p, "uFogK"); props_.uShadowOn = U(p, "uShadowOn");
+    props_.uAOMin = U(p, "uAOMin"); props_.uSoft = U(p, "uSoft"); props_.uFogCol = U(p, "uFogCol"); props_.uCam = U(p, "uCam"); props_.uFogK = U(p, "uFogK"); props_.uShadowOn = U(p, "uShadowOn");
     props_.uShadowTexel = U(p, "uShadowTexel");
     p = propsShadow_.prog;
     propsShadow_.uVP = U(p, "uVP"); propsShadow_.uLightVP = U(p, "uLightVP"); propsShadow_.uTime = U(p, "uTime");
@@ -363,7 +379,7 @@ bool Renderer::buildPrograms() {
     sky_.uTime = U(p, "uTime"); sky_.uSunDir = U(p, "uSunDir"); sky_.uClouds = U(p, "uClouds"); sky_.uFogCol = U(p, "uFogCol");
     p = ui_.prog;
     ui_.uRect = U(p, "uRect"); ui_.uScreen = U(p, "uScreen"); ui_.uColor = U(p, "uColor"); ui_.uShape = U(p, "uShape");
-    ui_.uParam = U(p, "uParam"); ui_.uTex = U(p, "uTex");
+    ui_.uParam = U(p, "uParam"); ui_.uTex = U(p, "uTex"); ui_.uUV = U(p, "uUV"); ui_.uSize = U(p, "uSize");
     return true;
 }
 
@@ -540,20 +556,23 @@ bool Renderer::init(const Pak& pak, const Quality& q, int w, int h) {
     size_t nm = pak.mats.size();
     matSway_.assign(nm, 0.f);
     matBoost_.assign(nm, 0.f);
+    matAO_.assign(nm, 0.55f);
+    matSoft_.assign(nm, 0.f);
     matMask_.assign(nm, 0);
     matDouble_.assign(nm, 0);
     for (size_t i = 0; i < nm; i++) {
         std::string n = pak.mats[i].name;
         matMask_[i] = (int)pak.mats[i].alpha;
         if (n.rfind("Bark", 0) == 0) { matSway_[i] = 0.0012f; }
-        else if (n.rfind("Leaf", 0) == 0) { matSway_[i] = 0.0012f; matBoost_[i] = 1.0f; matDouble_[i] = 1; }
-        else if (n == "Plant") { matSway_[i] = 0.05f; matBoost_[i] = 2.0f; matDouble_[i] = 1; }
-        else if (n == "Flowers") { matSway_[i] = 0.08f; matDouble_[i] = 1; }
-        else if (n == "Grass") { matSway_[i] = 0.10f; matBoost_[i] = 1.15f; matDouble_[i] = 1; }
+        else if (n.rfind("Leaf", 0) == 0) { matSway_[i] = 0.0012f; matBoost_[i] = 1.0f; matDouble_[i] = 1; matAO_[i] = 0.85f; matSoft_[i] = 0.55f; }
+        else if (n == "Plant") { matSway_[i] = 0.05f; matBoost_[i] = 2.0f; matDouble_[i] = 1; matAO_[i] = 0.80f; matSoft_[i] = 0.6f; }
+        else if (n == "Flowers") { matSway_[i] = 0.08f; matDouble_[i] = 1; matAO_[i] = 0.85f; matSoft_[i] = 0.5f; }
+        else if (n == "Grass") { matSway_[i] = 0.10f; matBoost_[i] = 1.15f; matDouble_[i] = 1; matAO_[i] = 0.78f; matSoft_[i] = 0.7f; }
         if (n == "Rocks") rocksMat_ = (int)i;
         if (n == "RocksDesert") rocksDesertMat_ = (int)i;
     }
     loadTextures();
+    buildFont();
     createTargets();
     lists_.init(pak.models.size() * 6);
     shadowLists_.init(pak.models.size() * 6);
@@ -562,6 +581,8 @@ bool Renderer::init(const Pak& pak, const Quality& q, int w, int h) {
 }
 
 void Renderer::destroy() {
+    if (fontTex_) glDeleteTextures(1, &fontTex_);
+    fontTex_ = 0;
     freeTextures();
     freeTargets();
     for (auto& a : vaos_) for (auto& b : a) for (GLuint v : b) if (v) glDeleteVertexArrays(1, &v);
@@ -593,7 +614,7 @@ void Renderer::setQuality(const Quality& q) {
     if (targetChange) createTargets();
 }
 
-GLuint Renderer::loadUITexture(const char* path) {
+GLuint Renderer::loadUITexture(const char* path, int* outW, int* outH) {
     std::vector<uint8_t> data;
     if (!plat_read_asset(path, data)) return 0;
     int w, h, n;
@@ -609,6 +630,8 @@ GLuint Renderer::loadUITexture(const char* path) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     stbi_image_free(px);
+    if (outW) *outW = w;
+    if (outH) *outH = h;
     return t;
 }
 
@@ -704,7 +727,11 @@ void Renderer::drawGroups(const InstanceLists& L, bool shadow) {
                 glBindTexture(GL_TEXTURE_2D, tex_[(size_t)mat]);
                 glUniform1i(P.uMask, matMask_[(size_t)mat]);
                 glUniform1f(P.uSway, matSway_[(size_t)mat]);
-                if (!shadow) glUniform1f(props_.uTintBoost, matBoost_[(size_t)mat]);
+                if (!shadow) {
+                    glUniform1f(props_.uTintBoost, matBoost_[(size_t)mat]);
+                    glUniform1f(props_.uAOMin, matAO_[(size_t)mat]);
+                    glUniform1f(props_.uSoft, matSoft_[(size_t)mat]);
+                }
                 if (!shadow) {
                     if (matDouble_[(size_t)mat]) glDisable(GL_CULL_FACE); else glEnable(GL_CULL_FACE);
                 }
@@ -913,6 +940,8 @@ void Renderer::uiBegin() {
 
 void Renderer::uiShape(int shape, float x, float y, float w, float h, float r, float g, float b, float a, float param, GLuint tex) {
     glUniform4f(ui_.uRect, x, y, w, h);
+    glUniform2f(ui_.uSize, w, h);
+    glUniform4f(ui_.uUV, 0.f, 0.f, 1.f, 1.f);
     glUniform4f(ui_.uColor, r, g, b, a);
     glUniform1i(ui_.uShape, shape);
     glUniform1f(ui_.uParam, param);
@@ -927,4 +956,107 @@ void Renderer::uiEnd() {
     glDisable(GL_BLEND);
     glBindVertexArray(0);
     glEnable(GL_DEPTH_TEST);
+}
+
+namespace {
+
+struct GlyphRow { char c; unsigned char r[7]; };
+
+const GlyphRow kGlyphs[] = {
+    {'A', {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}}, {'B', {0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E}},
+    {'C', {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E}}, {'D', {0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E}},
+    {'E', {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F}}, {'F', {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10}},
+    {'G', {0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F}}, {'H', {0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}},
+    {'I', {0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E}}, {'J', {0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C}},
+    {'K', {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11}}, {'L', {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F}},
+    {'M', {0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11}}, {'N', {0x11, 0x11, 0x19, 0x15, 0x13, 0x11, 0x11}},
+    {'O', {0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}}, {'P', {0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10}},
+    {'Q', {0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D}}, {'R', {0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11}},
+    {'S', {0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E}}, {'T', {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04}},
+    {'U', {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}}, {'V', {0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04}},
+    {'W', {0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A}}, {'X', {0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11}},
+    {'Y', {0x11, 0x11, 0x11, 0x0A, 0x04, 0x04, 0x04}}, {'Z', {0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F}},
+    {'0', {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E}}, {'1', {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E}},
+    {'2', {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F}}, {'3', {0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E}},
+    {'4', {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02}}, {'5', {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E}},
+    {'6', {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E}}, {'7', {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08}},
+    {'8', {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E}}, {'9', {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C}},
+    {':', {0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00}}, {'.', {0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C}},
+    {'-', {0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00}}, {'/', {0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10}},
+    {'!', {0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04}}, {'%', {0x19, 0x19, 0x02, 0x04, 0x08, 0x13, 0x13}},
+};
+
+int glyphIndex(char c) {
+    if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+    if (c < 32 || c > 95) return 0;
+    return c - 32;
+}
+
+}  // namespace
+
+void Renderer::buildFont() {
+    const int cell = 16, cols = 8, dim = cell * cols;
+    std::vector<unsigned char> a((size_t)dim * dim, 0);
+    for (const GlyphRow& g : kGlyphs) {
+        int idx = glyphIndex(g.c);
+        int cx = (idx % cols) * cell, cy = (idx / cols) * cell;
+        for (int row = 0; row < 7; row++)
+            for (int col = 0; col < 5; col++)
+                if (g.r[row] & (1 << (4 - col)))
+                    for (int dy = 0; dy < 2; dy++)
+                        for (int dx = 0; dx < 2; dx++)
+                            a[(size_t)(cy + 1 + row * 2 + dy) * dim + (size_t)(cx + 2 + col * 2 + dx)] = 255;
+    }
+    std::vector<unsigned char> px((size_t)dim * dim * 4);
+    for (int y = 0; y < dim; y++)
+        for (int x = 0; x < dim; x++) {
+            auto at = [&](int xx, int yy) -> int {
+                if (xx < 0 || yy < 0 || xx >= dim || yy >= dim) return 0;
+                return a[(size_t)yy * dim + (size_t)xx];
+            };
+            int v = at(x, y) * 4 + at(x - 1, y) + at(x + 1, y) + at(x, y - 1) + at(x, y + 1);
+            v = std::min(255, v * 3 / 4);
+            size_t o = ((size_t)y * dim + (size_t)x) * 4;
+            px[o] = px[o + 1] = px[o + 2] = 255;
+            px[o + 3] = (unsigned char)v;
+        }
+    glGenTextures(1, &fontTex_);
+    glBindTexture(GL_TEXTURE_2D, fontTex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dim, dim, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+}
+
+void Renderer::uiSprite(GLuint tex, float x, float y, float w, float h, float r, float g, float b, float a, float u0, float v0, float u1, float v1) {
+    glUniform4f(ui_.uRect, x, y, w, h);
+    glUniform2f(ui_.uSize, w, h);
+    glUniform4f(ui_.uUV, u0, v0, u1 - u0, v1 - v0);
+    glUniform4f(ui_.uColor, r, g, b, a);
+    glUniform1i(ui_.uShape, 3);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+}
+
+float Renderer::textWidth(const char* s, float h) const {
+    size_t n = std::strlen(s);
+    return n ? ((float)n - 1.f) * h * 0.76f + h * 0.66f : 0.f;
+}
+
+void Renderer::uiText(const char* s, float x, float y, float h, float r, float g, float b, float a, int align, bool shadow) {
+    float w = textWidth(s, h);
+    float x0 = align == 1 ? x - w * 0.5f : (align == 2 ? x - w : x);
+    for (int pass = shadow ? 0 : 1; pass < 2; pass++) {
+        float off = pass == 0 ? h * 0.07f : 0.f;
+        for (size_t i = 0; s[i]; i++) {
+            int idx = glyphIndex(s[i]);
+            if (idx == 0) continue;
+            float u0 = (float)(idx % 8) / 8.f, v0 = (float)(idx / 8) / 8.f;
+            float gx = x0 + (float)i * h * 0.76f - h * 0.125f + off;
+            if (pass == 0) uiSprite(fontTex_, gx, y + off, h, h, 0.f, 0.f, 0.f, a * 0.45f, u0, v0, u0 + 0.125f, v0 + 0.125f);
+            else uiSprite(fontTex_, gx, y, h, h, r, g, b, a, u0, v0, u0 + 0.125f, v0 + 0.125f);
+        }
+    }
 }

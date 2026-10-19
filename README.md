@@ -4,12 +4,15 @@ Infinite procedural stylized nature world (green meadows, autumn forests, pine f
 desert with dead trees and rock formations, winding paths) built from the Stylized Nature
 MegaKit. Pure C++ on Android NativeActivity, no Java code.
 
+## Flow
+Animated intro and loading screen, then the main menu over a slowly orbiting view of the
+world (PLAY, SETTINGS, QUIT). In game, the gear opens the pause menu (RESUME, SETTINGS, MAIN MENU).
+
 ## Controls
-- Left half of the screen: virtual joystick (push to the edge to run)
-- Right half: drag to look
+- Left joystick (fixed position by default, switchable to floating in Settings)
+- Drag anywhere else to look (speed adjustable in Settings)
 - Round button bottom-right: jump
-- Gear top-right: quality menu. Buttons are A (auto), then 1, 2, 3 bars for Low, Medium, High.
-  The round button at the bottom toggles the FPS counter.
+- Settings: graphics AUTO / LOW / MED / HIGH, joystick FIXED / FLOATING, look speed, FPS counter
 
 ## Performance tiers
 Detected from the GPU name, RAM and core count, then adapted live with dynamic resolution

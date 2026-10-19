@@ -36,7 +36,7 @@ struct InstanceLists {
 
 struct ProgProps {
     GLuint prog = 0;
-    GLint uVP = -1, uLightVP = -1, uTime = -1, uSway = -1, uTex = -1, uShadow = -1, uMask = -1, uTintBoost = -1;
+    GLint uVP = -1, uLightVP = -1, uTime = -1, uSway = -1, uTex = -1, uShadow = -1, uMask = -1, uTintBoost = -1, uAOMin = -1, uSoft = -1;
     GLint uSunDir = -1, uSunCol = -1, uAmbTop = -1, uAmbBot = -1, uFogCol = -1, uCam = -1, uFogK = -1, uShadowOn = -1, uShadowTexel = -1;
 };
 
@@ -53,7 +53,7 @@ struct ProgSky {
 
 struct ProgUI {
     GLuint prog = 0;
-    GLint uRect = -1, uScreen = -1, uColor = -1, uShape = -1, uParam = -1, uTex = -1;
+    GLint uRect = -1, uScreen = -1, uColor = -1, uShape = -1, uParam = -1, uTex = -1, uUV = -1, uSize = -1;
 };
 
 class Renderer {
@@ -66,7 +66,10 @@ public:
     void uiBegin();
     void uiShape(int shape, float x, float y, float w, float h, float r, float g, float b, float a, float param = 0.f, GLuint tex = 0);
     void uiEnd();
-    GLuint loadUITexture(const char* path);
+    GLuint loadUITexture(const char* path, int* outW = nullptr, int* outH = nullptr);
+    void uiSprite(GLuint tex, float x, float y, float w, float h, float r, float g, float b, float a, float u0, float v0, float u1, float v1);
+    void uiText(const char* s, float x, float y, float h, float r, float g, float b, float a, int align, bool shadow = true);
+    float textWidth(const char* s, float h) const;
     int width() const { return W_; }
     int height() const { return H_; }
     const Quality& quality() const { return q_; }
@@ -98,7 +101,9 @@ private:
     int instRing_ = 0;
     size_t instCap_ = 90000;
     std::vector<GLuint> tex_;
-    std::vector<float> matSway_, matBoost_;
+    std::vector<float> matSway_, matBoost_, matAO_, matSoft_;
+    GLuint fontTex_ = 0;
+    void buildFont();
     std::vector<int> matMask_, matDouble_;
     int rocksMat_ = -1, rocksDesertMat_ = -1;
     GLuint sceneFbo_ = 0, sceneColor_ = 0, sceneDepth_ = 0;

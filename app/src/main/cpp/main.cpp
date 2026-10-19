@@ -56,6 +56,10 @@ double plat_time() {
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
+void plat_quit() {
+    if (g_app && g_app->activity) ANativeActivity_finish(g_app->activity);
+}
+
 static void setImmersive() {
     if (!g_app || !g_app->activity || !g_app->activity->vm) return;
     JavaVM* vm = g_app->activity->vm;
