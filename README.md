@@ -8,11 +8,18 @@ MegaKit. Pure C++ on Android NativeActivity, no Java code.
 Animated intro and loading screen, then the main menu over a slowly orbiting view of the
 world (PLAY, SETTINGS, QUIT). In game, the gear opens the pause menu (RESUME, SETTINGS, MAIN MENU).
 
+## Survival loop
+- Walk up to trees, rocks, pebbles and mushrooms. The crosshair turns yellow when something is in reach. Hold HIT to chop or mine.
+- Bare hands work (slowly). Craft an AXE and PICKAXE in the BAG for faster work.
+- Craft a CAMPFIRE, WORKBENCH, BED and CHEST and place them with PLACE. Cook mushrooms next to a campfire.
+- MAKE opens the build menu: wood and stone floors, walls, door and window walls, fence, roof. Pieces snap to a 2 m grid, TURN flips them, DEL removes (full refund).
+- Hunger drains over time, starving costs health, eating heals. A full day/night cycle runs (about 14 min); sleep in a bed at night to skip to morning.
+- Everything is saved automatically (position, inventory, built pieces, chopped trees).
+
 ## Controls
-- Left joystick (fixed position by default, switchable to floating in Settings)
-- Drag anywhere else to look (speed adjustable in Settings)
-- Round button bottom-right: jump
-- Settings: graphics AUTO / LOW / MED / HIGH, joystick FIXED / FLOATING, look speed, FPS counter
+- Left joystick (fixed by default, floating in Settings), drag anywhere else to look
+- HIT / PLACE / EAT big button, JUMP, hotbar at the bottom (tap a slot)
+- BAG (inventory + crafting), MAKE (build menu), gear (pause and settings)
 
 ## Performance tiers
 Detected from the GPU name, RAM and core count, then adapted live with dynamic resolution

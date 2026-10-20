@@ -10,7 +10,12 @@ struct MatDef {
     char tex[33];
     uint32_t size;
     uint32_t alpha;
-    uint32_t tint;
+    uint32_t vcol;
+    uint32_t dbl;
+    float boost;
+    float sway;
+    float aoMin;
+    float soft;
 };
 
 struct SubMesh {
@@ -38,8 +43,9 @@ struct Pak {
     size_t vblobOff = 0, vblobSize = 0;
     size_t iblobOff = 0, iblobSize = 0;
     int find(const char* name) const {
+        std::string want = std::string(name).substr(0, 32);
         for (size_t i = 0; i < models.size(); i++)
-            if (std::string(models[i].name) == name) return (int)i;
+            if (std::string(models[i].name) == want) return (int)i;
         return -1;
     }
 };

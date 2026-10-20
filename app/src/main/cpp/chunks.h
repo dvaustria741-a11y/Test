@@ -6,8 +6,10 @@
 #include <mutex>
 #include <condition_variable>
 #include <memory>
+#include <cmath>
 #include "gl.h"
 #include "world.h"
+#include "vmath.h"
 
 struct Chunk {
     int cx = 0, cz = 0;
@@ -22,6 +24,21 @@ struct Chunk {
     int detailState = 0;
 };
 
+enum HarvestKind { HK_NONE = 0, HK_TREE, HK_DEAD, HK_ROCK, HK_PEBBLE, HK_MUSH };
+
+struct PropHit {
+    PropInst p;
+    float t = 0;
+    int kind = HK_NONE;
+    bool valid = false;
+};
+
+inline uint64_t propKey(float x, float z, int model) {
+    int64_t qx = (int64_t)std::floor(x * 16.f), qz = (int64_t)std::floor(z * 16.f);
+    uint64_t k = (uint64_t)(qx * 73856093LL) ^ (uint64_t)(qz * 19349663LL) ^ ((uint64_t)model * 83492791ULL);
+    return k * 0x9E3779B97F4A7C15ULL;
+}
+
 inline int64_t chunkKey(int cx, int cz) { return ((int64_t)(uint32_t)cx << 32) | (uint32_t)cz; }
 
 class ChunkManager {
@@ -34,6 +51,11 @@ public:
     bool coreReady(float px, float pz, int ring) const;
     float coreProgress(float px, float pz, int ring) const;
     void collide(float& x, float& z, float radius) const;
+    PropHit raycast(V3 o, V3 d, float maxDist) const;
+    void removeProp(const PropInst& p);
+    std::vector<uint64_t> removedList() const;
+    void setRemoved(const std::vector<uint64_t>& v);
+    int kindOf(int model) const { return model >= 0 && model < (int)kinds_.size() ? kinds_[(size_t)model] : 0; }
     const std::unordered_map<int64_t, Chunk>& chunks() const { return map_; }
 
 private:
@@ -61,4 +83,8 @@ private:
     std::vector<Result> results_;
     float camX_ = 0, camZ_ = 0;
     bool quit_ = false;
+    std::unordered_set<uint64_t> removed_;
+    std::vector<uint8_t> kinds_;
+    void applyRemovals(Chunk& c);
+    void applyRemovals(std::vector<PropInst>& v, std::vector<Collider>* cols);
 };

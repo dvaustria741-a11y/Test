@@ -60,23 +60,11 @@ int deviceCapTier() {
     return cap;
 }
 
-const unsigned char kSeg[10] = {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F};
 
 }  // namespace
 
 
-namespace {
-float easeOutCubic(float t) { t = clampf(t, 0.f, 1.f); float k = 1.f - t; return 1.f - k * k * k; }
-float easeOutBack(float t) {
-    t = clampf(t, 0.f, 1.f);
-    const float c1 = 1.70158f, c3 = c1 + 1.f;
-    float k = t - 1.f;
-    return 1.f + c3 * k * k * k + c1 * k * k;
-}
-const float kGreen[3] = {0.36f, 0.70f, 0.20f};
-const float kGreenDark[3] = {0.12f, 0.30f, 0.08f};
-const float kCream[3] = {1.0f, 0.97f, 0.86f};
-}  // namespace
+
 
 Game::Game() : world_(1337u) {
     std::vector<uint8_t> data;
@@ -91,9 +79,16 @@ Game::Game() : world_(1337u) {
     pos_ = {0.f, sh, 0.f};
     spawn_ = pos_;
     loadSettings();
+    if (pakOk_) {
+        initSurvival();
+        loadGame();
+    }
 }
 
-Game::~Game() { cm_.reset(); }
+Game::~Game() {
+    if (pakOk_) saveGame();
+    cm_.reset();
+}
 
 void Game::loadSettings() {
     std::string path = plat_data_dir() + "/settings.txt";
@@ -144,6 +139,7 @@ bool Game::initGL(int w, int h, const char* glRenderer) {
     }
     glReady_ = true;
     applyQuality(tier);
+    rend_.setExtras(&extras_);
     screen_ = S_SPLASH;
     screenT_ = 0;
     trans_ = 0;
@@ -164,6 +160,7 @@ bool Game::initGL(int w, int h, const char* glRenderer) {
 
 void Game::termGL() {
     if (!glReady_) return;
+    saveGame();
     if (cm_) cm_->releaseGL();
     GLuint* texs[] = {&texJoyBase_, &texJoyKnob_, &texJump_, &texGear_, &texLogo_, &texBtn_, &texPanel_};
     for (GLuint* t : texs) if (*t) { glDeleteTextures(1, t); *t = 0; }
@@ -180,20 +177,47 @@ void Game::resize(int w, int h) {
 
 void Game::layout() {
     u_ = std::max(0.5f, (float)H_ / 1080.f);
+    float W = (float)W_, H = (float)H_;
     joyR_ = 150.f * u_;
     joyCX_ = 250.f * u_;
-    joyCY_ = (float)H_ - 250.f * u_;
-    jumpR_ = 88.f * u_;
-    jumpCX_ = (float)W_ - 190.f * u_;
-    jumpCY_ = (float)H_ - 220.f * u_;
+    joyCY_ = H - 250.f * u_;
+    actR_ = 115.f * u_;
+    actCX_ = W - 230.f * u_;
+    actCY_ = H - 250.f * u_;
+    jumpR_ = 80.f * u_;
+    jumpCX_ = W - 470.f * u_;
+    jumpCY_ = H - 150.f * u_;
     gearR_ = 48.f * u_;
-    gearCX_ = (float)W_ - 80.f * u_;
+    gearCX_ = W - 80.f * u_;
     gearCY_ = 80.f * u_;
+    topR_ = 50.f * u_;
+    bagCX_ = W - 205.f * u_;
+    bagCY_ = 80.f * u_;
+    buildCX_ = W - 330.f * u_;
+    buildCY_ = 80.f * u_;
+    subR_ = 58.f * u_;
+    rotCX_ = W - 230.f * u_;
+    rotCY_ = H - 460.f * u_;
+    delCX_ = W - 410.f * u_;
+    delCY_ = H - 350.f * u_;
+    cancelCX_ = W - 95.f * u_;
+    cancelCY_ = H - 420.f * u_;
+}
+
+void Game::slotRect(int i, float& x, float& y, float& w, float& h) const {
+    int n = (int)hotbar_.size();
+    float ss = 88.f * u_, gap = 10.f * u_;
+    float total = (float)n * ss + (float)std::max(0, n - 1) * gap;
+    x = ((float)W_ - total) * 0.5f + (float)i * (ss + gap);
+    y = (float)H_ - ss - 26.f * u_;
+    w = ss;
+    h = ss;
 }
 
 void Game::clearTouches() {
     for (auto& t : touches_) { t.id = -1; t.role = R_NONE; }
     joyX_ = joyY_ = 0;
+    actHeld_ = false;
     uiPtr_ = -1;
     uiDown_ = false;
     uiClick_ = false;
@@ -209,11 +233,12 @@ void Game::go(Screen s) {
 void Game::enterScreen() {
     clearTouches();
     if (screen_ == S_MENU) menuT_ = 0;
-    if (screen_ == S_PLAY) { velX_ = velZ_ = 0; }
+    if (screen_ == S_PLAY) { velX_ = velZ_ = 0; hotbarDirty_ = true; }
 }
 
 V3 Game::streamPos() const {
-    bool fromPlay = screen_ == S_PLAY || screen_ == S_PAUSE || (screen_ == S_SETTINGS && settingsFrom_ == S_PAUSE);
+    bool fromPlay = screen_ == S_PLAY || screen_ == S_PAUSE || screen_ == S_BAG || screen_ == S_BUILD || screen_ == S_DEAD ||
+                    (screen_ == S_SETTINGS && settingsFrom_ == S_PAUSE);
     return fromPlay ? pos_ : spawn_;
 }
 
@@ -238,10 +263,15 @@ Camera Game::playCamera() const {
     Camera cam;
     cam.pos = {pos_.x, pos_.y + 1.72f + bob_, pos_.z};
     cam.yaw = yaw_;
-    cam.pitch = pitch_;
+    cam.pitch = clampf(pitch_ + kick_, -1.5f, 1.5f);
     cam.fov = 1.22f;
     cam.aspect = (float)W_ / (float)H_;
     return cam;
+}
+
+V3 Game::camForward() const {
+    float cp = std::cos(pitch_), sp = std::sin(pitch_);
+    return {std::sin(yaw_) * cp, sp, -std::cos(yaw_) * cp};
 }
 
 bool Game::uiInside(float px, float py, float x, float y, float w, float h) const {
@@ -250,6 +280,11 @@ bool Game::uiInside(float px, float py, float x, float y, float w, float h) cons
 
 bool Game::clickIn(float x, float y, float w, float h) const {
     return uiClick_ && trans_ == 0 && uiInside(uiCX_, uiCY_, x, y, w, h) && uiInside(uiSX_, uiSY_, x, y, w, h);
+}
+
+bool Game::hitCircle(float x, float y, float cx, float cy, float r) const {
+    float dx = x - cx, dy = y - cy;
+    return dx * dx + dy * dy <= r * r;
 }
 
 void Game::uiTouch(int action, int id, float x, float y) {
@@ -283,21 +318,41 @@ void Game::touch(int action, int id, float x, float y) {
         for (auto& tt : touches_) if (tt.id < 0) { t = &tt; break; }
         if (!t) return;
         t->id = id; t->sx = t->x = t->lx = x; t->sy = t->y = t->ly = y; t->role = R_NONE;
-        float dx = x - gearCX_, dy = y - gearCY_;
-        if (dx * dx + dy * dy <= gearR_ * gearR_ * 1.7f) {
+        if (hitCircle(x, y, gearCX_, gearCY_, gearR_ * 1.3f)) {
             clearTouches();
+            saveGame();
             screen_ = S_PAUSE;
             screenT_ = 0;
             return;
         }
-        dx = x - jumpCX_; dy = y - jumpCY_;
-        if (dx * dx + dy * dy <= jumpR_ * jumpR_ * 1.3f) { t->role = R_JUMP; jumpReq_ = true; return; }
+        if (hitCircle(x, y, bagCX_, bagCY_, topR_ * 1.2f)) { clearTouches(); screen_ = S_BAG; screenT_ = 0; return; }
+        if (hitCircle(x, y, buildCX_, buildCY_, topR_ * 1.2f)) { clearTouches(); screen_ = S_BUILD; screenT_ = 0; return; }
+        if (buildActive_) {
+            if (hitCircle(x, y, rotCX_, rotCY_, subR_ * 1.15f)) { buildFlip_++; return; }
+            if (hitCircle(x, y, delCX_, delCY_, subR_ * 1.15f)) { removeAimed(); return; }
+            if (hitCircle(x, y, cancelCX_, cancelCY_, subR_ * 1.15f)) { buildActive_ = false; return; }
+        }
+        if (hitCircle(x, y, actCX_, actCY_, actR_ * 1.15f)) {
+            t->role = R_ACT;
+            actHeld_ = true;
+            doAct();
+            return;
+        }
+        if (hitCircle(x, y, jumpCX_, jumpCY_, jumpR_ * 1.25f)) { t->role = R_JUMP; jumpReq_ = true; return; }
+        for (int i = 0; i < (int)hotbar_.size(); i++) {
+            float sx, sy, sw, sh;
+            slotRect(i, sx, sy, sw, sh);
+            if (x >= sx && x <= sx + sw && y >= sy && y <= sy + sh) {
+                sel_ = i;
+                buildActive_ = false;
+                return;
+            }
+        }
         bool joyActive = false;
         for (auto& tt : touches_) if (tt.id >= 0 && tt.role == R_JOY) joyActive = true;
         if (!joyActive) {
             if (joyMode_ == 0) {
-                dx = x - joyCX_; dy = y - joyCY_;
-                if (dx * dx + dy * dy <= joyR_ * joyR_ * 1.8f) {
+                if (hitCircle(x, y, joyCX_, joyCY_, joyR_ * 1.35f)) {
                     t->role = R_JOY;
                     joyBaseX_ = joyCX_; joyBaseY_ = joyCY_;
                     return;
@@ -323,6 +378,7 @@ void Game::touch(int action, int id, float x, float y) {
     } else {
         if (!t) return;
         if (t->role == R_JOY) { joyX_ = joyY_ = 0; }
+        if (t->role == R_ACT) actHeld_ = false;
         t->id = -1; t->role = R_NONE;
     }
 }
@@ -343,6 +399,14 @@ void Game::updatePlay(float dt) {
             }
         }
     }
+    cooldown_ -= dt;
+    if (swingT_ >= 0.f) {
+        swingT_ += dt / 0.32f;
+        if (swingT_ >= 1.f) swingT_ = -1.f;
+    }
+    kick_ *= std::exp(-10.f * dt);
+    if (actHeld_ && cooldown_ <= 0.f) doAct();
+
     float mag = std::min(1.f, std::sqrt(joyX_ * joyX_ + joyY_ * joyY_));
     float speed = 5.2f * mag;
     if (mag > 0.92f) speed = 8.6f;
@@ -356,13 +420,15 @@ void Game::updatePlay(float dt) {
     velZ_ += (tvz - velZ_) * a;
     float nx = pos_.x + velX_ * dt, nz = pos_.z + velZ_ * dt;
     cm_->collide(nx, nz, 0.45f);
+    collidePlaced(nx, nz, 0.45f);
     pos_.x = nx; pos_.z = nz;
-    float ground = world_.height(pos_.x, pos_.z);
+    float ground = groundAt(pos_.x, pos_.z);
     if (jumpReq_ && onGround_) { vy_ = 7.2f; onGround_ = false; }
     jumpReq_ = false;
     if (onGround_) {
         pos_.y = ground;
         vy_ = 0;
+        if (hunger_ <= 0.f) vy_ = 0;
     } else {
         vy_ -= 22.f * dt;
         pos_.y += vy_ * dt;
@@ -432,6 +498,14 @@ void Game::frame() {
     V3 sp = streamPos();
     cm_->update(sp.x, sp.z, screen_ == S_SPLASH ? 6 : 2);
 
+    if (screen_ == S_PLAY) {
+        tod_ += dt / dayLen_;
+        if (tod_ >= 1.f) { tod_ -= 1.f; day_++; }
+    }
+    Atmos atm;
+    computeAtmos(atm);
+    rend_.setAtmos(atm);
+
     switch (screen_) {
         case S_SPLASH:
             drawSplash(dt);
@@ -441,283 +515,53 @@ void Game::frame() {
             bool fromPlay = screen_ == S_SETTINGS && settingsFrom_ == S_PAUSE;
             if (!fromPlay) menuT_ += dt;
             Camera cam = fromPlay ? playCamera() : menuCamera();
+            PLight none[2];
+            rend_.setLights(none, 0);
+            rend_.setViewModel(ViewModelState());
+            rend_.setGhost(false, ghost_, 0, 0, 0);
+            flickerFires();
             rend_.render(cam, *cm_, time_, renderScale_);
             rend_.uiBegin();
             if (screen_ == S_MENU) drawMenu(); else drawSettings();
             break;
         }
-        case S_PLAY:
+        case S_PLAY: {
             updatePlay(dt);
+            updateSurvival(dt);
             adaptQuality(dt);
-            rend_.render(playCamera(), *cm_, time_, renderScale_);
+            Camera cam = playCamera();
+            updateTarget();
+            computeGhost();
+            flickerFires();
+            updateLights(cam);
+            updateViewModel(cam);
+            rend_.setGhost(ghostOn_, ghost_, ghostValid_ ? 0.3f : 1.0f, ghostValid_ ? 1.0f : 0.25f, ghostValid_ ? 0.4f : 0.2f);
+            rend_.render(cam, *cm_, time_, renderScale_);
             rend_.uiBegin();
             drawHUD();
             break;
+        }
         case S_PAUSE:
-            rend_.render(playCamera(), *cm_, time_, renderScale_);
+        case S_BAG:
+        case S_BUILD:
+        case S_DEAD: {
+            Camera cam = playCamera();
+            updateLights(cam);
+            rend_.setViewModel(ViewModelState());
+            rend_.setGhost(false, ghost_, 0, 0, 0);
+            flickerFires();
+            rend_.render(cam, *cm_, time_, renderScale_);
             rend_.uiBegin();
-            drawPause();
+            if (screen_ == S_PAUSE) drawPause();
+            else if (screen_ == S_BAG) drawBag();
+            else if (screen_ == S_BUILD) drawBuildMenu();
+            else drawDead();
             break;
+        }
     }
     if (fade_ > 0.001f) rend_.uiShape(2, 0, 0, (float)W_, (float)H_, 0.03f, 0.08f, 0.05f, fade_, 0.f);
     rend_.uiEnd();
     uiClick_ = false;
-}
-
-void Game::drawLeaves(float alpha) {
-    for (int i = 0; i < 18; i++) {
-        float ph = (float)i * 0.6180339f;
-        float sp = 0.035f + 0.02f * std::fmod(ph * 7.f, 1.f);
-        float fx = std::fmod(ph + time_ * sp * 0.4f, 1.f);
-        float fy = std::fmod(ph * 3.7f + time_ * sp, 1.f);
-        float x = fx * (float)W_ + std::sin(time_ * 1.1f + (float)i) * 40.f * u_;
-        float y = fy * ((float)H_ + 60.f * u_) - 30.f * u_;
-        float sz = (10.f + 12.f * std::fmod(ph * 5.f, 1.f)) * u_;
-        int k = i % 3;
-        float r = k == 0 ? 1.0f : (k == 1 ? 0.95f : 0.55f);
-        float g = k == 0 ? 0.55f : (k == 1 ? 0.78f : 0.82f);
-        float b = k == 0 ? 0.12f : (k == 1 ? 0.20f : 0.15f);
-        rend_.uiShape(0, x, y, sz * 1.5f, sz, r, g, b, 0.85f * alpha);
-    }
-}
-
-void Game::drawLogoImage(float x, float y, float w, float a) {
-    float lh = w * (float)logoH_ / (float)std::max(1, logoW_);
-    rend_.uiSprite(texLogo_, x, y, w, lh, 1, 1, 1, a, 0, 0, 1, 1);
-    float th = w * 0.075f;
-    rend_.uiText("NATURE GAME", x + w * 0.5f, y + lh * 0.64f - th * 0.5f, th, 0.36f, 0.20f, 0.07f, a, 1, false);
-}
-
-void Game::drawSky() {
-    const int bands = 14;
-    float bh = (float)H_ / (float)bands + 1.f;
-    for (int i = 0; i < bands; i++) {
-        float t = (float)i / (float)(bands - 1);
-        rend_.uiShape(2, 0, bh * (float)i - (float)i, (float)W_, bh, lerpf(0.34f, 0.86f, t), lerpf(0.62f, 0.93f, t), lerpf(0.95f, 0.98f, t), 1.f, 0.f);
-    }
-}
-
-void Game::drawSplash(float dt) {
-    float prog = cm_->coreProgress(spawn_.x, spawn_.z, 2);
-    shownProg_ += (prog - shownProg_) * std::min(1.f, dt * 4.f);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glViewport(0, 0, W_, H_);
-    glClearColor(0.8f, 0.9f, 0.97f, 1.f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    rend_.uiBegin();
-    drawSky();
-    float W = (float)W_, H = (float)H_;
-    float sunRise = easeOutCubic(screenT_ / 1.6f);
-    float sunY = H * (0.62f - 0.30f * sunRise);
-    rend_.uiShape(0, W * 0.72f - 230.f * u_, sunY - 230.f * u_, 460.f * u_, 460.f * u_, 1.0f, 0.95f, 0.75f, 0.35f);
-    rend_.uiShape(0, W * 0.72f - 130.f * u_, sunY - 130.f * u_, 260.f * u_, 260.f * u_, 1.0f, 0.92f, 0.62f, 0.9f);
-    float hillA = easeOutCubic(screenT_ / 1.2f);
-    float hy1 = H * (1.25f - 0.34f * hillA), hy2 = H * (1.40f - 0.34f * hillA);
-    rend_.uiShape(0, -W * 0.25f, hy1 - H * 0.55f, W * 1.1f, H * 1.1f, 0.30f, 0.58f, 0.22f, 1.f);
-    rend_.uiShape(0, W * 0.30f, hy2 - H * 0.62f, W * 1.2f, H * 1.24f, 0.42f, 0.72f, 0.20f, 1.f);
-    drawLeaves(1.f);
-
-    float a = easeOutBack(screenT_ / 1.0f);
-    float fadeIn = clampf(screenT_ / 0.6f, 0.f, 1.f);
-    float cx = W * 0.5f, cy = H * 0.34f;
-    if (texLogo_) {
-        float lw = std::min(W * 0.5f, 820.f * u_) * (0.7f + 0.3f * a), lh = lw * (float)logoH_ / (float)std::max(1, logoW_);
-        drawLogoImage(cx - lw * 0.5f, cy - lh * 0.5f, lw, fadeIn);
-    } else {
-        float th = 150.f * u_ * (0.6f + 0.4f * a);
-        rend_.uiText("NATURE", cx, cy - th * 1.0f, th, 1.0f, 0.97f, 0.86f, fadeIn, 1);
-        rend_.uiText("GAME", cx, cy + th * 0.05f, th, 1.0f, 0.78f, 0.25f, fadeIn, 1);
-    }
-    float sub = clampf((screenT_ - 0.9f) / 0.6f, 0.f, 1.f);
-    rend_.uiText("EXPLORE THE WILD", cx, H * 0.66f, 38.f * u_, 1.f, 1.f, 1.f, sub * 0.95f, 1);
-
-    float bw = 640.f * u_, bh = 20.f * u_;
-    float bx = (W - bw) * 0.5f, by = H * 0.86f;
-    rend_.uiShape(2, bx, by, bw, bh, 0.05f, 0.14f, 0.06f, 0.55f, 1.f);
-    float fillW = std::max(bh, bw * shownProg_);
-    rend_.uiShape(2, bx, by, fillW, bh, 0.55f, 0.88f, 0.25f, 1.f, 1.f);
-    rend_.uiShape(2, bx + 3.f * u_, by + 3.f * u_, std::max(bh - 6.f * u_, fillW - 6.f * u_), bh * 0.4f, 1, 1, 1, 0.3f, 1.f);
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "LOADING %d%%", (int)std::lround(shownProg_ * 100.f));
-    rend_.uiText(buf, W * 0.5f, by + bh + 16.f * u_, 32.f * u_, 1, 1, 1, 0.95f, 1);
-
-    if (trans_ == 0 && ((prog >= 0.999f && screenT_ > 2.8f) || plat_time() - loadStart_ > 25.0)) go(S_MENU);
-}
-
-void Game::drawPanel(float x, float y, float w, float h, float a) {
-    if (texPanel_) { rend_.uiSprite(texPanel_, x, y, w, h, 1, 1, 1, a, 0, 0, 1, 1); return; }
-    rend_.uiShape(2, x, y + 10.f * u_, w, h, 0.02f, 0.06f, 0.04f, 0.35f * a, 0.10f);
-    rend_.uiShape(2, x, y, w, h, 0.08f, 0.17f, 0.12f, 0.92f * a, 0.10f);
-    rend_.uiShape(2, x + 5.f * u_, y + 5.f * u_, w - 10.f * u_, h * 0.12f, 1, 1, 1, 0.08f * a, 1.f);
-}
-
-bool Game::button(float x, float y, float w, float h, const char* label, bool primary, float alpha) {
-    bool pressed = uiDown_ && trans_ == 0 && uiInside(uiX_, uiY_, x, y, w, h) && uiInside(uiSX_, uiSY_, x, y, w, h);
-    bool clicked = clickIn(x, y, w, h);
-    float sc = pressed ? 0.95f : 1.f;
-    float bw = w * sc, bh = h * sc;
-    float bx = x + (w - bw) * 0.5f, by = y + (h - bh) * 0.5f + (pressed ? 4.f * u_ : 0.f);
-    float cr = primary ? kGreen[0] : 0.20f, cg = primary ? kGreen[1] : 0.38f, cb = primary ? kGreen[2] : 0.30f;
-    if (pressed) { cr *= 0.88f; cg *= 0.88f; cb *= 0.88f; }
-    if (texBtn_) {
-        rend_.uiSprite(texBtn_, bx, by, bw, bh, primary ? 1.f : 0.85f, 1.f, primary ? 1.f : 0.9f, alpha, 0, 0, 1, 1);
-    } else {
-        rend_.uiShape(2, bx, by + 9.f * u_, bw, bh, kGreenDark[0], kGreenDark[1], kGreenDark[2], 0.85f * alpha, 0.45f);
-        rend_.uiShape(2, bx, by, bw, bh, cr, cg, cb, alpha, 0.45f);
-        rend_.uiShape(2, bx + 6.f * u_, by + 5.f * u_, bw - 12.f * u_, bh * 0.44f, 1, 1, 1, 0.20f * alpha, 0.5f);
-    }
-    float th = std::min(bh * 0.40f, 56.f * u_);
-    rend_.uiText(label, bx + bw * 0.5f, by + (bh - th) * 0.5f - 2.f * u_, th, kCream[0], kCream[1], kCream[2], alpha, 1);
-    return clicked;
-}
-
-int Game::segmented(float x, float y, float w, float h, const char* const* labels, int n, int sel) {
-    float sw = w / (float)n;
-    int clicked = -1;
-    rend_.uiShape(2, x, y, w, h, 0.04f, 0.09f, 0.07f, 0.75f, 0.5f);
-    for (int i = 0; i < n; i++) {
-        float sx = x + sw * (float)i;
-        if (clickIn(sx, y, sw, h)) clicked = i;
-        bool pressed = uiDown_ && uiInside(uiX_, uiY_, sx, y, sw, h) && uiInside(uiSX_, uiSY_, sx, y, sw, h);
-        if (i == sel) {
-            rend_.uiShape(2, sx + 4.f * u_, y + 4.f * u_, sw - 8.f * u_, h - 8.f * u_, kGreen[0], kGreen[1], kGreen[2], 1.f, 0.5f);
-            rend_.uiShape(2, sx + 8.f * u_, y + 7.f * u_, sw - 16.f * u_, (h - 8.f * u_) * 0.4f, 1, 1, 1, 0.22f, 0.5f);
-        } else if (pressed) {
-            rend_.uiShape(2, sx + 4.f * u_, y + 4.f * u_, sw - 8.f * u_, h - 8.f * u_, 1, 1, 1, 0.12f, 0.5f);
-        }
-        float th = std::min(h * 0.42f, 34.f * u_);
-        rend_.uiText(labels[i], sx + sw * 0.5f, y + (h - th) * 0.5f, th, kCream[0], kCream[1], kCream[2], i == sel ? 1.f : 0.75f, 1);
-    }
-    return clicked;
-}
-
-void Game::drawMenu() {
-    float W = (float)W_, H = (float)H_;
-    for (int i = 0; i < 10; i++)
-        rend_.uiShape(2, 0, 0, W * 0.62f * (1.f - (float)i / 10.f), H, 0.02f, 0.07f, 0.05f, 0.06f, 0.f);
-    drawLeaves(0.9f);
-    float tIn = easeOutBack(screenT_ / 0.9f);
-    float bob = std::sin(time_ * 1.2f) * 6.f * u_;
-    float x0 = 120.f * u_;
-    if (texLogo_) {
-        float lw = std::min(W * 0.40f, 700.f * u_) * (0.8f + 0.2f * tIn);
-        drawLogoImage(x0, H * 0.04f + bob, lw, clampf(screenT_ / 0.5f, 0.f, 1.f));
-    } else {
-        float th = 130.f * u_;
-        float al = clampf(screenT_ / 0.5f, 0.f, 1.f);
-        rend_.uiText("NATURE", x0, H * 0.08f + bob, th * (0.7f + 0.3f * tIn), 1.0f, 0.97f, 0.86f, al, 0);
-        rend_.uiText("GAME", x0, H * 0.08f + th * 1.02f + bob, th * (0.7f + 0.3f * tIn), 1.0f, 0.78f, 0.25f, al, 0);
-    }
-    const char* labels[3] = {"PLAY", "SETTINGS", "QUIT"};
-    float bwid = 560.f * u_;
-    float bhs[3] = {150.f * u_, 120.f * u_, 120.f * u_};
-    float y = H * 0.52f;
-    for (int i = 0; i < 3; i++) {
-        float p = easeOutCubic((screenT_ - 0.25f - 0.12f * (float)i) / 0.55f);
-        float xo = -(1.f - p) * 700.f * u_;
-        float yy = y + (i == 0 ? 0.f : 0.f);
-        bool c = button(x0 + xo, yy, bwid, bhs[i], labels[i], i == 0, p);
-        if (c && p > 0.9f) {
-            if (i == 0) go(S_PLAY);
-            else if (i == 1) go(S_SETTINGS);
-            else plat_quit();
-        }
-        y += bhs[i] + 26.f * u_;
-    }
-    rend_.uiText("V0.1", W - 30.f * u_, H - 60.f * u_, 30.f * u_, 1, 1, 1, 0.7f, 2);
-}
-
-void Game::drawSettings() {
-    float W = (float)W_, H = (float)H_;
-    rend_.uiShape(2, 0, 0, W, H, 0.02f, 0.05f, 0.04f, 0.45f, 0.f);
-    float pw = 1240.f * u_, ph = 800.f * u_;
-    float pp = easeOutCubic(screenT_ / 0.35f);
-    float px = (W - pw) * 0.5f, py = (H - ph) * 0.5f + (1.f - pp) * 60.f * u_;
-    drawPanel(px, py, pw, ph, pp);
-    rend_.uiText("SETTINGS", px + pw * 0.5f, py + 36.f * u_, 62.f * u_, kCream[0], kCream[1], kCream[2], pp, 1);
-    float lx = px + 70.f * u_, cx = px + 470.f * u_, cw = pw - 540.f * u_, rh = 84.f * u_;
-    float y = py + 160.f * u_;
-    float th = 40.f * u_;
-    static const char* qL[4] = {"AUTO", "LOW", "MED", "HIGH"};
-    static const char* jL[2] = {"FIXED", "FLOATING"};
-    static const char* sL[3] = {"LOW", "MED", "HIGH"};
-    static const char* fL[2] = {"ON", "OFF"};
-    rend_.uiText("GRAPHICS", lx, y + (rh - th) * 0.5f, th, 1, 1, 1, pp, 0);
-    int c = segmented(cx, y, cw, rh, qL, 4, mode_);
-    if (c >= 0 && c != mode_) { mode_ = c; applyQuality(mode_ == 0 ? detectedTier_ : mode_ - 1); saveSettings(); }
-    y += rh + 40.f * u_;
-    rend_.uiText("JOYSTICK", lx, y + (rh - th) * 0.5f, th, 1, 1, 1, pp, 0);
-    c = segmented(cx, y, cw, rh, jL, 2, joyMode_);
-    if (c >= 0 && c != joyMode_) { joyMode_ = c; saveSettings(); }
-    y += rh + 40.f * u_;
-    rend_.uiText("LOOK SPEED", lx, y + (rh - th) * 0.5f, th, 1, 1, 1, pp, 0);
-    c = segmented(cx, y, cw, rh, sL, 3, lookSens_);
-    if (c >= 0 && c != lookSens_) { lookSens_ = c; saveSettings(); }
-    y += rh + 40.f * u_;
-    rend_.uiText("FPS COUNTER", lx, y + (rh - th) * 0.5f, th, 1, 1, 1, pp, 0);
-    c = segmented(cx, y, cw, rh, fL, 2, showFps_ ? 0 : 1);
-    if (c >= 0) { showFps_ = c == 0; saveSettings(); }
-    if (button(px + (pw - 420.f * u_) * 0.5f, py + ph - 150.f * u_, 420.f * u_, 100.f * u_, "BACK", true, pp)) {
-        if (settingsFrom_ == S_PAUSE) { screen_ = S_PAUSE; screenT_ = 0; clearTouches(); }
-        else go(S_MENU);
-    }
-}
-
-void Game::drawPause() {
-    float W = (float)W_, H = (float)H_;
-    float pp = easeOutCubic(screenT_ / 0.25f);
-    rend_.uiShape(2, 0, 0, W, H, 0.02f, 0.05f, 0.04f, 0.5f * pp, 0.f);
-    float pw = 1000.f * u_, ph = 640.f * u_;
-    float px = (W - pw) * 0.5f, py = (H - ph) * 0.5f + (1.f - pp) * 50.f * u_;
-    drawPanel(px, py, pw, ph, pp);
-    rend_.uiText("PAUSED", px + pw * 0.5f, py + 34.f * u_, 60.f * u_, kCream[0], kCream[1], kCream[2], pp, 1);
-    float bw = pw - 380.f * u_, bh = 110.f * u_, bx = px + 190.f * u_, y = py + 150.f * u_;
-    if (button(bx, y, bw, bh, "RESUME", true, pp)) { screen_ = S_PLAY; screenT_ = 0; clearTouches(); return; }
-    y += bh + 24.f * u_;
-    if (button(bx, y, bw, bh, "SETTINGS", false, pp)) { settingsFrom_ = S_PAUSE; screen_ = S_SETTINGS; screenT_ = 0; clearTouches(); return; }
-    y += bh + 24.f * u_;
-    if (button(bx, y, bw, bh, "MAIN MENU", false, pp)) go(S_MENU);
-}
-
-void Game::drawHUD() {
-    bool joyOn = false;
-    float jx = 0, jy = 0;
-    for (auto& t : touches_) if (t.id >= 0 && t.role == R_JOY) { joyOn = true; jx = t.x; jy = t.y; }
-    bool fixed = joyMode_ == 0;
-    float bx = (fixed || !joyOn) ? joyCX_ : joyBaseX_, by = (fixed || !joyOn) ? joyCY_ : joyBaseY_;
-    float baseA = joyOn ? 0.60f : (fixed ? 0.40f : 0.25f);
-    if (texJoyBase_) rend_.uiSprite(texJoyBase_, bx - joyR_, by - joyR_, joyR_ * 2, joyR_ * 2, 1, 1, 1, baseA / 0.6f, 0, 0, 1, 1);
-    else {
-        rend_.uiShape(0, bx - joyR_, by - joyR_, joyR_ * 2, joyR_ * 2, 1, 1, 1, baseA * 0.30f);
-        rend_.uiShape(1, bx - joyR_, by - joyR_, joyR_ * 2, joyR_ * 2, 1, 1, 1, baseA, 0.05f);
-    }
-    float kr = 58.f * u_, kx = bx, ky = by;
-    if (joyOn) {
-        float dx = jx - bx, dy = jy - by, m = std::sqrt(dx * dx + dy * dy);
-        if (m > joyR_) { dx = dx / m * joyR_; dy = dy / m * joyR_; }
-        kx = bx + dx; ky = by + dy;
-    }
-    if (texJoyKnob_) rend_.uiSprite(texJoyKnob_, kx - kr, ky - kr, kr * 2, kr * 2, 1, 1, 1, joyOn ? 0.95f : 0.6f, 0, 0, 1, 1);
-    else rend_.uiShape(0, kx - kr, ky - kr, kr * 2, kr * 2, 1, 1, 1, joyOn ? 0.75f : 0.40f);
-
-    bool jp = false;
-    for (auto& t : touches_) if (t.id >= 0 && t.role == R_JUMP) jp = true;
-    if (texJump_) rend_.uiSprite(texJump_, jumpCX_ - jumpR_, jumpCY_ - jumpR_, jumpR_ * 2, jumpR_ * 2, 1, 1, 1, jp ? 1.f : 0.8f, 0, 0, 1, 1);
-    else {
-        rend_.uiShape(0, jumpCX_ - jumpR_, jumpCY_ - jumpR_, jumpR_ * 2, jumpR_ * 2, 1, 1, 1, jp ? 0.5f : 0.25f);
-        rend_.uiShape(1, jumpCX_ - jumpR_, jumpCY_ - jumpR_, jumpR_ * 2, jumpR_ * 2, 1, 1, 1, 0.8f, 0.06f);
-        rend_.uiText("JUMP", jumpCX_, jumpCY_ - 16.f * u_, 32.f * u_, 1, 1, 1, 0.95f, 1);
-    }
-    if (texGear_) rend_.uiSprite(texGear_, gearCX_ - gearR_, gearCY_ - gearR_, gearR_ * 2, gearR_ * 2, 1, 1, 1, 0.9f, 0, 0, 1, 1);
-    else {
-        rend_.uiShape(0, gearCX_ - gearR_, gearCY_ - gearR_, gearR_ * 2, gearR_ * 2, 0, 0, 0, 0.35f);
-        rend_.uiShape(2, gearCX_ - gearR_ * 0.42f, gearCY_ - gearR_ * 0.45f, gearR_ * 0.84f, gearR_ * 0.2f, 1, 1, 1, 0.95f, 1.f);
-        rend_.uiShape(2, gearCX_ - gearR_ * 0.42f, gearCY_ - gearR_ * 0.10f, gearR_ * 0.84f, gearR_ * 0.2f, 1, 1, 1, 0.95f, 1.f);
-        rend_.uiShape(2, gearCX_ - gearR_ * 0.42f, gearCY_ + gearR_ * 0.25f, gearR_ * 0.84f, gearR_ * 0.2f, 1, 1, 1, 0.95f, 1.f);
-    }
-    if (showFps_) {
-        char buf[24];
-        std::snprintf(buf, sizeof(buf), "FPS %d", shownFps_);
-        rend_.uiText(buf, 30.f * u_, 24.f * u_, 36.f * u_, 1, 1, 1, 0.95f, 0);
-    }
+    saveTimer_ += dt;
+    if (saveTimer_ > 45.f && screen_ == S_PLAY) { saveTimer_ = 0.f; saveGame(); }
 }

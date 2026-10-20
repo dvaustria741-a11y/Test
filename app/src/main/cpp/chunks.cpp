@@ -4,6 +4,16 @@
 #include <algorithm>
 
 ChunkManager::ChunkManager(const World& w, const ModelIds& ids, const Pak& pk) : world_(w), ids_(ids), pak_(pk) {
+    kinds_.assign(pk.models.size(), 0);
+    for (size_t i = 0; i < pk.models.size(); i++) {
+        std::string n = pk.models[i].name;
+        auto st = [&](const char* pre) { return n.rfind(pre, 0) == 0; };
+        if (st("CommonTree") || st("Pine") || st("TwistedTree")) kinds_[i] = HK_TREE;
+        else if (st("DeadTree")) kinds_[i] = HK_DEAD;
+        else if (st("Rock_Medium")) kinds_[i] = HK_ROCK;
+        else if (st("Pebble") || st("RockPath")) kinds_[i] = HK_PEBBLE;
+        else if (st("Mushroom")) kinds_[i] = HK_MUSH;
+    }
     thread_ = std::thread([this] { worker(); });
 }
 
@@ -88,6 +98,7 @@ void ChunkManager::uploadChunk(ChunkCPU& c) {
     ch.maxY = c.terrain.maxY;
     ch.structs = std::move(c.structs);
     ch.colliders = std::move(c.colliders);
+    applyRemovals(ch.structs, &ch.colliders);
     glGenBuffers(1, &ch.vbo);
     glBindBuffer(GL_ARRAY_BUFFER, ch.vbo);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(c.terrain.verts.size() * sizeof(TVert)), c.terrain.verts.data(), GL_STATIC_DRAW);
@@ -141,6 +152,7 @@ void ChunkManager::update(float px, float pz, int maxUploads) {
             auto it = map_.find(chunkKey(r.detail->cx, r.detail->cz));
             if (it != map_.end()) {
                 it->second.detail = std::move(r.detail->items);
+                applyRemovals(it->second.detail, nullptr);
                 it->second.detailState = 2;
             }
         }
@@ -225,4 +237,96 @@ void ChunkManager::collide(float& x, float& z, float radius) const {
                 }
             }
         }
+}
+
+void ChunkManager::applyRemovals(std::vector<PropInst>& v, std::vector<Collider>* cols) {
+    if (removed_.empty()) return;
+    for (PropInst& p : v) {
+        if (p.s <= 0.f) continue;
+        if (removed_.count(propKey(p.x, p.z, p.model))) {
+            p.s = 0.f;
+            if (cols) {
+                for (size_t i = 0; i < cols->size(); i++)
+                    if (std::fabs((*cols)[i].x - p.x) < 0.05f && std::fabs((*cols)[i].z - p.z) < 0.05f) {
+                        cols->erase(cols->begin() + (long)i);
+                        break;
+                    }
+            }
+        }
+    }
+}
+
+void ChunkManager::removeProp(const PropInst& pi) {
+    removed_.insert(propKey(pi.x, pi.z, pi.model));
+    auto it = map_.find(chunkKey((int)std::floor(pi.x / CHUNK_SIZE), (int)std::floor(pi.z / CHUNK_SIZE)));
+    if (it == map_.end()) return;
+    applyRemovals(it->second.structs, &it->second.colliders);
+    applyRemovals(it->second.detail, nullptr);
+}
+
+std::vector<uint64_t> ChunkManager::removedList() const {
+    return std::vector<uint64_t>(removed_.begin(), removed_.end());
+}
+
+void ChunkManager::setRemoved(const std::vector<uint64_t>& v) {
+    removed_.clear();
+    for (uint64_t k : v) removed_.insert(k);
+}
+
+PropHit ChunkManager::raycast(V3 o, V3 d, float maxDist) const {
+    PropHit best;
+    best.t = maxDist;
+    int pcx = (int)std::floor(o.x / CHUNK_SIZE), pcz = (int)std::floor(o.z / CHUNK_SIZE);
+    for (int dz = -1; dz <= 1; dz++)
+        for (int dx = -1; dx <= 1; dx++) {
+            auto it = map_.find(chunkKey(pcx + dx, pcz + dz));
+            if (it == map_.end()) continue;
+            for (int pass = 0; pass < 2; pass++) {
+                const std::vector<PropInst>& v = pass == 0 ? it->second.structs : it->second.detail;
+                for (const PropInst& p : v) {
+                    if (p.s <= 0.f) continue;
+                    int kind = kinds_[p.model];
+                    if (kind == HK_NONE) continue;
+                    float ddx = p.x - o.x, ddz = p.z - o.z;
+                    if (ddx * ddx + ddz * ddz > (maxDist + 4.f) * (maxDist + 4.f)) continue;
+                    float t = -1.f;
+                    if (kind == HK_TREE || kind == HK_DEAD) {
+                        float r = (kind == HK_TREE ? 0.55f : 0.45f) * p.s;
+                        float ymax = p.y + (kind == HK_TREE ? 3.6f : 3.0f) * p.s + 1.0f;
+                        float ocx = o.x - p.x, ocz = o.z - p.z;
+                        float a = d.x * d.x + d.z * d.z;
+                        if (a < 1e-6f) continue;
+                        float b = 2.f * (ocx * d.x + ocz * d.z);
+                        float cc = ocx * ocx + ocz * ocz - r * r;
+                        float disc = b * b - 4.f * a * cc;
+                        if (disc < 0.f) continue;
+                        float tt = cc < 0.f ? 0.f : (-b - std::sqrt(disc)) / (2.f * a);
+                        if (tt < 0.f) continue;
+                        float y = o.y + d.y * tt;
+                        if (y < p.y - 0.2f || y > ymax) continue;
+                        t = tt;
+                    } else {
+                        const ModelDef& md = pak_.models[p.model];
+                        float r = kind == HK_ROCK ? md.radius * p.s * 0.6f : std::max(0.5f, md.radius * p.s * 1.1f);
+                        V3 c = {p.x, p.y + md.cy * p.s, p.z};
+                        V3 oc = o - c;
+                        float b = dot(oc, d);
+                        float cc = dot(oc, oc) - r * r;
+                        float disc = b * b - cc;
+                        if (disc < 0.f) continue;
+                        float tt = -b - std::sqrt(disc);
+                        if (tt < 0.f) tt = cc < 0.f ? 0.f : -1.f;
+                        if (tt < 0.f) continue;
+                        t = tt;
+                    }
+                    if (t >= 0.f && t < best.t) {
+                        best.t = t;
+                        best.p = p;
+                        best.kind = kind;
+                        best.valid = true;
+                    }
+                }
+            }
+        }
+    return best;
 }

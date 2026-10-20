@@ -25,17 +25,31 @@ uniform mat4 uLightVP;
 uniform float uTime;
 uniform float uSway;
 uniform float uAOMin;
+uniform float uPitch;
+uniform float uRoll;
 out vec2 vUV;
 out vec3 vN;
 out float vAO;
 out vec3 vTint;
 out vec3 vW;
 out vec3 vSh;
+out vec3 vVC;
+out float vEm;
 void main(){
-  float c = cos(iYaw);
-  float s = sin(iYaw);
   vec3 p = aPos * iPS.w;
   vec3 n = aNrm.xyz;
+  if (uPitch != 0.0 || uRoll != 0.0) {
+    float cr = cos(uRoll);
+    float sr = sin(uRoll);
+    p = vec3(cr*p.x - sr*p.y, sr*p.x + cr*p.y, p.z);
+    n = vec3(cr*n.x - sr*n.y, sr*n.x + cr*n.y, n.z);
+    float cp = cos(uPitch);
+    float sp = sin(uPitch);
+    p = vec3(p.x, cp*p.y - sp*p.z, sp*p.y + cp*p.z);
+    n = vec3(n.x, cp*n.y - sp*n.z, sp*n.y + cp*n.z);
+  }
+  float c = cos(iYaw);
+  float s = sin(iYaw);
   p = vec3(c*p.x + s*p.z, p.y, -s*p.x + c*p.z);
   n = vec3(c*n.x + s*n.z, n.y, -s*n.x + c*n.z);
   vec3 w = p + iPS.xyz;
@@ -47,6 +61,8 @@ void main(){
   vN = n;
   vAO = mix(uAOMin, 1.0, aCol.r);
   vTint = iTint.rgb;
+  vVC = aCol.rgb;
+  vEm = 1.0 - aCol.a;
   vW = w;
   vSh = (uLightVP * vec4(w, 1.0)).xyz;
   gl_Position = uVP * vec4(w, 1.0);
@@ -61,11 +77,17 @@ in float vAO;
 in vec3 vTint;
 in highp vec3 vW;
 in highp vec3 vSh;
+in vec3 vVC;
+in float vEm;
 uniform sampler2D uTex;
 uniform sampler2DShadow uShadow;
 uniform int uMask;
 uniform float uTintBoost;
 uniform float uSoft;
+uniform float uVCol;
+uniform vec4 uGhost;
+uniform highp vec4 uLP[2];
+uniform vec3 uLC[2];
 uniform vec3 uSunDir;
 uniform vec3 uSunCol;
 uniform vec3 uAmbTop;
@@ -80,6 +102,7 @@ void main(){
   vec4 t = texture(uTex, vUV);
   if (uMask == 1 && t.a < 0.40) discard;
   vec3 base = t.rgb;
+  if (uVCol > 0.5) base = vVC;
   if (uTintBoost > 0.0) {
     float l = dot(base, vec3(0.299, 0.587, 0.114));
     base = vTint * l * uTintBoost;
@@ -103,16 +126,27 @@ void main(){
     sh = mix(0.50, 1.0, sh);
   }
   vec3 amb = mix(uAmbBot, uAmbTop, n.y * 0.5 + 0.5);
-  vec3 lit = (amb + uSunCol * toon * sh) * vAO;
+  vec3 fl = vec3(0.0);
+  for (int i = 0; i < 2; i++) {
+    vec3 dv = uLP[i].xyz - vW;
+    float dist = length(dv);
+    float att = clamp(1.0 - dist / max(uLP[i].w, 0.01), 0.0, 1.0);
+    att *= att;
+    float nd = max(dot(n, dv / max(dist, 0.001)), 0.0) * 0.7 + 0.3;
+    fl += uLC[i] * att * nd;
+  }
+  vec3 lit = (amb + uSunCol * toon * sh + fl) * vAO;
   vec3 col = base * lit;
   float tr = pow(clamp(dot(V, -uSunDir), 0.0, 1.0), 3.0) * uSoft;
   col += base * uSunCol * tr * 0.55 * sh;
+  col = mix(col, base * 1.2, vEm);
   col = 1.0 - exp(-col * 1.75);
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
   col = clamp(mix(vec3(lum), col, 1.18), 0.0, 1.0);
   float d = length(vW - uCam);
   float f = 1.0 - exp(-d * d * uFogK * uFogK);
   col = mix(col, uFogCol, clamp(f, 0.0, 1.0));
+  col = mix(col, uGhost.rgb, uGhost.a);
   oCol = vec4(col, 1.0);
 }
 )GLSL";
@@ -163,6 +197,8 @@ uniform vec3 uCam;
 uniform float uFogK;
 uniform int uShadowOn;
 uniform float uShadowTexel;
+uniform vec4 uLP[2];
+uniform vec3 uLC[2];
 out vec4 oCol;
 float h2(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float vn(vec2 p){
@@ -193,7 +229,16 @@ void main(){
     sh = mix(0.45, 1.0, sh);
   }
   vec3 amb = mix(uAmbBot, uAmbTop, nn.y * 0.5 + 0.5);
-  vec3 col = base * (amb + uSunCol * toon * sh);
+  vec3 fl = vec3(0.0);
+  for (int i = 0; i < 2; i++) {
+    vec3 dv = uLP[i].xyz - vW;
+    float dist = length(dv);
+    float att = clamp(1.0 - dist / max(uLP[i].w, 0.01), 0.0, 1.0);
+    att *= att;
+    float nd = max(dot(nn, dv / max(dist, 0.001)), 0.0) * 0.7 + 0.3;
+    fl += uLC[i] * att * nd;
+  }
+  vec3 col = base * (amb + uSunCol * toon * sh + fl);
   col = 1.0 - exp(-col * 1.75);
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
   col = clamp(mix(vec3(lum), col, 1.18), 0.0, 1.0);
@@ -226,6 +271,9 @@ uniform float uTime;
 uniform vec3 uSunDir;
 uniform int uClouds;
 uniform vec3 uFogCol;
+uniform vec3 uZen;
+uniform vec3 uMoonDir;
+uniform float uNight;
 out vec4 oCol;
 float h2(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float vn(vec2 p){
@@ -237,16 +285,24 @@ float vn(vec2 p){
 void main(){
   vec3 dir = normalize(uF + uR * (vNdc.x * uTanY * uAspect) + uU * (vNdc.y * uTanY));
   float h = clamp(dir.y, 0.0, 1.0);
-  vec3 zen = vec3(0.36, 0.62, 0.95);
+  vec3 zen = uZen;
   vec3 col = mix(uFogCol, zen, pow(h, 0.46));
   float sd = max(dot(dir, uSunDir), 0.0);
-  col += vec3(1.0, 0.86, 0.58) * (pow(sd, 90.0) * 0.55 + pow(sd, 7.0) * 0.14);
+  col += vec3(1.0, 0.86, 0.58) * (pow(sd, 90.0) * 0.55 + pow(sd, 7.0) * 0.14) * (1.0 - uNight);
+  if (uNight > 0.02 && dir.y > 0.0) {
+    vec3 q = floor(dir * 170.0);
+    float hs = fract(sin(dot(q, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+    float tw = 0.6 + 0.4 * sin(uTime * 3.0 + hs * 50.0);
+    col += vec3(step(0.9965, hs) * tw * uNight * smoothstep(0.0, 0.25, dir.y));
+  }
+  float md = max(dot(dir, uMoonDir), 0.0);
+  col += vec3(0.75, 0.82, 1.0) * smoothstep(0.9992, 0.9996, md) * uNight;
   if (uClouds > 0 && dir.y > 0.01) {
     vec2 uv = dir.xz / (dir.y + 0.18) * 1.15 + vec2(uTime * 0.012, uTime * 0.004);
     float c = vn(uv) * 0.58 + vn(uv * 2.3) * 0.30;
     if (uClouds > 1) c += vn(uv * 5.1) * 0.12;
     float cl = smoothstep(0.50, 0.80, c) * smoothstep(0.0, 0.22, dir.y);
-    vec3 cc = mix(vec3(0.86, 0.90, 0.97), vec3(1.0), smoothstep(0.55, 0.95, c));
+    vec3 cc = mix(vec3(0.86, 0.90, 0.97), vec3(1.0), smoothstep(0.55, 0.95, c)) * mix(1.0, 0.22, uNight);
     col = mix(col, cc, cl * 0.92);
   }
   if (dir.y < 0.0) col = mix(uFogCol, uFogCol * 0.95, clamp(-dir.y * 3.0, 0.0, 1.0));
@@ -344,12 +400,6 @@ GLuint link(const char* vs, const char* fs) {
     return p;
 }
 
-const V3 kSunDir = vnorm({0.42f, 0.78f, 0.46f});
-const float kSunCol[3] = {0.78f, 0.68f, 0.50f};
-const float kAmbTop[3] = {0.56f, 0.66f, 0.80f};
-const float kAmbBot[3] = {0.40f, 0.38f, 0.30f};
-const float kFogCol[3] = {0.84f, 0.92f, 0.98f};
-
 }  // namespace
 
 bool Renderer::buildPrograms() {
@@ -364,7 +414,7 @@ bool Renderer::buildPrograms() {
     props_.uVP = U(p, "uVP"); props_.uLightVP = U(p, "uLightVP"); props_.uTime = U(p, "uTime"); props_.uSway = U(p, "uSway");
     props_.uTex = U(p, "uTex"); props_.uShadow = U(p, "uShadow"); props_.uMask = U(p, "uMask"); props_.uTintBoost = U(p, "uTintBoost");
     props_.uSunDir = U(p, "uSunDir"); props_.uSunCol = U(p, "uSunCol"); props_.uAmbTop = U(p, "uAmbTop"); props_.uAmbBot = U(p, "uAmbBot");
-    props_.uAOMin = U(p, "uAOMin"); props_.uSoft = U(p, "uSoft"); props_.uFogCol = U(p, "uFogCol"); props_.uCam = U(p, "uCam"); props_.uFogK = U(p, "uFogK"); props_.uShadowOn = U(p, "uShadowOn");
+    props_.uAOMin = U(p, "uAOMin"); props_.uSoft = U(p, "uSoft"); props_.uPitch = U(p, "uPitch"); props_.uRoll = U(p, "uRoll"); props_.uVCol = U(p, "uVCol"); props_.uGhost = U(p, "uGhost"); props_.uLP = U(p, "uLP[0]"); props_.uLC = U(p, "uLC[0]"); props_.uFogCol = U(p, "uFogCol"); props_.uCam = U(p, "uCam"); props_.uFogK = U(p, "uFogK"); props_.uShadowOn = U(p, "uShadowOn");
     props_.uShadowTexel = U(p, "uShadowTexel");
     p = propsShadow_.prog;
     propsShadow_.uVP = U(p, "uVP"); propsShadow_.uLightVP = U(p, "uLightVP"); propsShadow_.uTime = U(p, "uTime");
@@ -373,10 +423,10 @@ bool Renderer::buildPrograms() {
     terrain_.uVP = U(p, "uVP"); terrain_.uLightVP = U(p, "uLightVP"); terrain_.uShadow = U(p, "uShadow");
     terrain_.uSunDir = U(p, "uSunDir"); terrain_.uSunCol = U(p, "uSunCol"); terrain_.uAmbTop = U(p, "uAmbTop");
     terrain_.uAmbBot = U(p, "uAmbBot"); terrain_.uFogCol = U(p, "uFogCol"); terrain_.uCam = U(p, "uCam");
-    terrain_.uFogK = U(p, "uFogK"); terrain_.uShadowOn = U(p, "uShadowOn"); terrain_.uShadowTexel = U(p, "uShadowTexel");
+    terrain_.uLP = U(p, "uLP[0]"); terrain_.uLC = U(p, "uLC[0]"); terrain_.uFogK = U(p, "uFogK"); terrain_.uShadowOn = U(p, "uShadowOn"); terrain_.uShadowTexel = U(p, "uShadowTexel");
     p = sky_.prog;
     sky_.uF = U(p, "uF"); sky_.uR = U(p, "uR"); sky_.uU = U(p, "uU"); sky_.uTanY = U(p, "uTanY"); sky_.uAspect = U(p, "uAspect");
-    sky_.uTime = U(p, "uTime"); sky_.uSunDir = U(p, "uSunDir"); sky_.uClouds = U(p, "uClouds"); sky_.uFogCol = U(p, "uFogCol");
+    sky_.uZen = U(p, "uZen"); sky_.uMoonDir = U(p, "uMoonDir"); sky_.uNight = U(p, "uNight"); sky_.uTime = U(p, "uTime"); sky_.uSunDir = U(p, "uSunDir"); sky_.uClouds = U(p, "uClouds"); sky_.uFogCol = U(p, "uFogCol");
     p = ui_.prog;
     ui_.uRect = U(p, "uRect"); ui_.uScreen = U(p, "uScreen"); ui_.uColor = U(p, "uColor"); ui_.uShape = U(p, "uShape");
     ui_.uParam = U(p, "uParam"); ui_.uTex = U(p, "uTex"); ui_.uUV = U(p, "uUV"); ui_.uSize = U(p, "uSize");
@@ -558,16 +608,19 @@ bool Renderer::init(const Pak& pak, const Quality& q, int w, int h) {
     matBoost_.assign(nm, 0.f);
     matAO_.assign(nm, 0.55f);
     matSoft_.assign(nm, 0.f);
+    matVcol_.assign(nm, 0.f);
     matMask_.assign(nm, 0);
     matDouble_.assign(nm, 0);
     for (size_t i = 0; i < nm; i++) {
-        std::string n = pak.mats[i].name;
-        matMask_[i] = (int)pak.mats[i].alpha;
-        if (n.rfind("Bark", 0) == 0) { matSway_[i] = 0.0012f; }
-        else if (n.rfind("Leaf", 0) == 0) { matSway_[i] = 0.0012f; matBoost_[i] = 1.0f; matDouble_[i] = 1; matAO_[i] = 0.85f; matSoft_[i] = 0.55f; }
-        else if (n == "Plant") { matSway_[i] = 0.05f; matBoost_[i] = 2.0f; matDouble_[i] = 1; matAO_[i] = 0.80f; matSoft_[i] = 0.6f; }
-        else if (n == "Flowers") { matSway_[i] = 0.08f; matDouble_[i] = 1; matAO_[i] = 0.85f; matSoft_[i] = 0.5f; }
-        else if (n == "Grass") { matSway_[i] = 0.10f; matBoost_[i] = 1.15f; matDouble_[i] = 1; matAO_[i] = 0.78f; matSoft_[i] = 0.7f; }
+        const MatDef& m = pak.mats[i];
+        matMask_[i] = (int)m.alpha;
+        matDouble_[i] = (int)m.dbl;
+        matBoost_[i] = m.boost;
+        matSway_[i] = m.sway;
+        matAO_[i] = m.aoMin;
+        matSoft_[i] = m.soft;
+        matVcol_[i] = (float)m.vcol;
+        std::string n = m.name;
         if (n == "Rocks") rocksMat_ = (int)i;
         if (n == "RocksDesert") rocksDesertMat_ = (int)i;
     }
@@ -576,6 +629,8 @@ bool Renderer::init(const Pak& pak, const Quality& q, int w, int h) {
     createTargets();
     lists_.init(pak.models.size() * 6);
     shadowLists_.init(pak.models.size() * 6);
+    vmLists_.init(pak.models.size() * 6);
+    ghostLists_.init(pak.models.size() * 6);
     scratch_.reserve(instCap_);
     return true;
 }
@@ -641,6 +696,17 @@ void Renderer::collect(const Camera& cam, const Frustum& fr, ChunkManager& cm) {
     const float catDist[5] = {q_.treeDist, q_.rockDist, q_.bushDist, q_.detailDist, q_.pebbleDist};
     const float maxChunkDist = q_.treeDist + 80.f;
     const size_t cap = instCap_ * 7 / 10;
+    if (extras_) {
+        const float ed = std::max(q_.rockDist, 120.f);
+        for (const PropInst& e : *extras_) {
+            if (e.s <= 0.001f) continue;
+            float dx = e.x - cam.pos.x, dz = e.z - cam.pos.z;
+            if (dx * dx + dz * dz > ed * ed) continue;
+            const ModelDef& md = pak_->models[e.model];
+            if (!frustumSphere(fr, e.x, e.y + md.cy * e.s, e.z, md.radius * e.s)) continue;
+            lists_.add(((size_t)e.model * 2) * 3, GPUInst{e.x, e.y, e.z, e.s, e.yaw, e.tint});
+        }
+    }
     for (const auto& kv : cm.chunks()) {
         const Chunk& c = kv.second;
         float x0 = (float)(c.cx * CHUNK_SIZE), z0 = (float)(c.cz * CHUNK_SIZE);
@@ -652,6 +718,7 @@ void Renderer::collect(const Camera& cam, const Frustum& fr, ChunkManager& cm) {
             if (pass == 1 && c.detailState != 2) break;
             const std::vector<PropInst>& v = pass == 0 ? c.structs : c.detail;
             for (const PropInst& p : v) {
+                if (p.s <= 0.001f) continue;
                 const ModelDef& md = pak_->models[p.model];
                 float dx = p.x - cam.pos.x, dz = p.z - cam.pos.z;
                 float d2 = dx * dx + dz * dz;
@@ -684,6 +751,15 @@ void Renderer::collectShadow(const Camera& cam, ChunkManager& cm) {
     shadowLists_.clear();
     const float R = q_.shadowDist;
     const size_t cap = instCap_ * 25 / 100;
+    if (extras_) {
+        for (const PropInst& e : *extras_) {
+            if (e.s <= 0.001f) continue;
+            float dx = e.x - cam.pos.x, dz = e.z - cam.pos.z;
+            if (dx * dx + dz * dz > (R + 6.f) * (R + 6.f)) continue;
+            if (shadowLists_.total >= cap) break;
+            shadowLists_.add(((size_t)e.model * 2) * 3, GPUInst{e.x, e.y, e.z, e.s, e.yaw, e.tint});
+        }
+    }
     for (const auto& kv : cm.chunks()) {
         const Chunk& c = kv.second;
         float x0 = (float)(c.cx * CHUNK_SIZE), z0 = (float)(c.cz * CHUNK_SIZE);
@@ -691,6 +767,7 @@ void Renderer::collectShadow(const Camera& cam, ChunkManager& cm) {
         float cdz = std::max(std::max(z0 - cam.pos.z, 0.f), cam.pos.z - (z0 + CHUNK_SIZE));
         if (cdx * cdx + cdz * cdz > (R + 20.f) * (R + 20.f)) continue;
         for (const PropInst& p : c.structs) {
+            if (p.s <= 0.001f) continue;
             float dx = p.x - cam.pos.x, dz = p.z - cam.pos.z;
             float d2 = dx * dx + dz * dz;
             if (d2 > (R + 10.f) * (R + 10.f)) continue;
@@ -731,6 +808,7 @@ void Renderer::drawGroups(const InstanceLists& L, bool shadow) {
                     glUniform1f(props_.uTintBoost, matBoost_[(size_t)mat]);
                     glUniform1f(props_.uAOMin, matAO_[(size_t)mat]);
                     glUniform1f(props_.uSoft, matSoft_[(size_t)mat]);
+                    glUniform1f(props_.uVCol, matVcol_[(size_t)mat]);
                 }
                 if (!shadow) {
                     if (matDouble_[(size_t)mat]) glDisable(GL_CULL_FACE); else glEnable(GL_CULL_FACE);
@@ -752,6 +830,7 @@ void Renderer::render(const Camera& cam, ChunkManager& cm, float time, float ren
     camPos_ = cam.pos;
     lastDrawCalls_ = 0;
     fogK_ = 2.0f / q_.viewDist;
+    const V3 kSunDir = atmos_.lightDir;
     float cy = std::cos(cam.pitch), sy = std::sin(cam.pitch);
     V3 fwd = {std::sin(cam.yaw) * cy, sy, -std::cos(cam.yaw) * cy};
     V3 right = vnorm(cross(fwd, V3{0, 1, 0}));
@@ -764,7 +843,7 @@ void Renderer::render(const Camera& cam, ChunkManager& cm, float time, float ren
     frustumFromVP(vp, fr);
 
     collect(cam, fr, cm);
-    shadowActive_ = q_.shadows && shadowFbo_ != 0;
+    shadowActive_ = q_.shadows && shadowFbo_ != 0 && atmos_.night < 0.85f;
     if (shadowActive_) collectShadow(cam, cm);
 
     scratch_.clear();
@@ -775,10 +854,18 @@ void Renderer::render(const Camera& cam, ChunkManager& cm, float time, float ren
             scratch_.insert(scratch_.end(), v.begin(), v.end());
         }
     };
+    vmLists_.clear();
+    ghostLists_.clear();
+    if (vm_.on && vm_.model >= 0) {
+        vmLists_.add(((size_t)vm_.model * 2) * 3, GPUInst{vm_.pos.x, vm_.pos.y, vm_.pos.z, vm_.scale, vm_.yaw, 0xFFFFFFFFu});
+        if (vm_.fire >= 0) vmLists_.add(((size_t)vm_.fire * 2) * 3, GPUInst{vm_.pos.x, vm_.pos.y, vm_.pos.z, vm_.scale, vm_.yaw, 0xFFFFFFFFu});
+    }
+    if (ghostOn_ && ghost_.model < pak_->models.size())
+        ghostLists_.add(((size_t)ghost_.model * 2) * 3, GPUInst{ghost_.x, ghost_.y, ghost_.z, ghost_.s, ghost_.yaw, 0xFFFFFFFFu});
     flatten(lists_);
-    size_t shadowBase = scratch_.size();
-    (void)shadowBase;
     if (shadowActive_) flatten(shadowLists_);
+    flatten(vmLists_);
+    flatten(ghostLists_);
     instRing_ ^= 1;
     glBindBuffer(GL_ARRAY_BUFFER, instVbo_[instRing_]);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(instCap_ * sizeof(GPUInst)), nullptr, GL_STREAM_DRAW);
@@ -839,7 +926,7 @@ void Renderer::render(const Camera& cam, ChunkManager& cm, float time, float ren
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
     glViewport(0, 0, rw, rh);
-    glClearColor(kFogCol[0], kFogCol[1], kFogCol[2], 1.f);
+    glClearColor(atmos_.fogCol.x, atmos_.fogCol.y, atmos_.fogCol.z, 1.f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     glDisable(GL_DEPTH_TEST);
@@ -851,9 +938,12 @@ void Renderer::render(const Camera& cam, ChunkManager& cm, float time, float ren
     glUniform1f(sky_.uTanY, std::tan(cam.fov * 0.5f));
     glUniform1f(sky_.uAspect, cam.aspect);
     glUniform1f(sky_.uTime, time_);
-    glUniform3f(sky_.uSunDir, kSunDir.x, kSunDir.y, kSunDir.z);
+    glUniform3f(sky_.uSunDir, atmos_.sunDisc.x, atmos_.sunDisc.y, atmos_.sunDisc.z);
+    glUniform3f(sky_.uMoonDir, atmos_.moonDir.x, atmos_.moonDir.y, atmos_.moonDir.z);
+    glUniform3f(sky_.uZen, atmos_.zenith.x, atmos_.zenith.y, atmos_.zenith.z);
+    glUniform1f(sky_.uNight, atmos_.night);
     glUniform1i(sky_.uClouds, q_.clouds);
-    glUniform3f(sky_.uFogCol, kFogCol[0], kFogCol[1], kFogCol[2]);
+    glUniform3f(sky_.uFogCol, atmos_.fogCol.x, atmos_.fogCol.y, atmos_.fogCol.z);
     glBindVertexArray(emptyVao_);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glEnable(GL_DEPTH_TEST);
@@ -871,12 +961,19 @@ void Renderer::render(const Camera& cam, ChunkManager& cm, float time, float ren
     glUniformMatrix4fv(terrain_.uLightVP, 1, GL_FALSE, lightBias.m);
     glUniform1i(terrain_.uShadow, 1);
     glUniform3f(terrain_.uSunDir, kSunDir.x, kSunDir.y, kSunDir.z);
-    glUniform3f(terrain_.uSunCol, kSunCol[0], kSunCol[1], kSunCol[2]);
-    glUniform3f(terrain_.uAmbTop, kAmbTop[0], kAmbTop[1], kAmbTop[2]);
-    glUniform3f(terrain_.uAmbBot, kAmbBot[0], kAmbBot[1], kAmbBot[2]);
-    glUniform3f(terrain_.uFogCol, kFogCol[0], kFogCol[1], kFogCol[2]);
+    glUniform3f(terrain_.uSunCol, atmos_.sunCol.x, atmos_.sunCol.y, atmos_.sunCol.z);
+    glUniform3f(terrain_.uAmbTop, atmos_.ambTop.x, atmos_.ambTop.y, atmos_.ambTop.z);
+    glUniform3f(terrain_.uAmbBot, atmos_.ambBot.x, atmos_.ambBot.y, atmos_.ambBot.z);
+    glUniform3f(terrain_.uFogCol, atmos_.fogCol.x, atmos_.fogCol.y, atmos_.fogCol.z);
     glUniform3f(terrain_.uCam, cam.pos.x, cam.pos.y, cam.pos.z);
     glUniform1f(terrain_.uFogK, fogK_);
+    float lpos[8], lcol[6];
+    for (int i = 0; i < 2; i++) {
+        lpos[i * 4 + 0] = lights_[i].pos.x; lpos[i * 4 + 1] = lights_[i].pos.y; lpos[i * 4 + 2] = lights_[i].pos.z; lpos[i * 4 + 3] = lights_[i].radius;
+        lcol[i * 3 + 0] = lights_[i].col.x; lcol[i * 3 + 1] = lights_[i].col.y; lcol[i * 3 + 2] = lights_[i].col.z;
+    }
+    glUniform4fv(terrain_.uLP, 2, lpos);
+    glUniform3fv(terrain_.uLC, 2, lcol);
     glUniform1i(terrain_.uShadowOn, shadowActive_ ? 1 : 0);
     glUniform1f(terrain_.uShadowTexel, texel);
     const float maxTerr = (float)((int)(q_.viewDist / CHUNK_SIZE) + 2) * CHUNK_SIZE;
@@ -903,15 +1000,33 @@ void Renderer::render(const Camera& cam, ChunkManager& cm, float time, float ren
     glUniform1i(props_.uTex, 0);
     glUniform1i(props_.uShadow, 1);
     glUniform3f(props_.uSunDir, kSunDir.x, kSunDir.y, kSunDir.z);
-    glUniform3f(props_.uSunCol, kSunCol[0], kSunCol[1], kSunCol[2]);
-    glUniform3f(props_.uAmbTop, kAmbTop[0], kAmbTop[1], kAmbTop[2]);
-    glUniform3f(props_.uAmbBot, kAmbBot[0], kAmbBot[1], kAmbBot[2]);
-    glUniform3f(props_.uFogCol, kFogCol[0], kFogCol[1], kFogCol[2]);
+    glUniform3f(props_.uSunCol, atmos_.sunCol.x, atmos_.sunCol.y, atmos_.sunCol.z);
+    glUniform3f(props_.uAmbTop, atmos_.ambTop.x, atmos_.ambTop.y, atmos_.ambTop.z);
+    glUniform3f(props_.uAmbBot, atmos_.ambBot.x, atmos_.ambBot.y, atmos_.ambBot.z);
+    glUniform3f(props_.uFogCol, atmos_.fogCol.x, atmos_.fogCol.y, atmos_.fogCol.z);
     glUniform3f(props_.uCam, cam.pos.x, cam.pos.y, cam.pos.z);
     glUniform1f(props_.uFogK, fogK_);
     glUniform1i(props_.uShadowOn, shadowActive_ ? 1 : 0);
     glUniform1f(props_.uShadowTexel, texel);
+    glUniform4fv(props_.uLP, 2, lpos);
+    glUniform3fv(props_.uLC, 2, lcol);
+    glUniform4f(props_.uGhost, 0.f, 0.f, 0.f, 0.f);
+    glUniform1f(props_.uPitch, 0.f);
+    glUniform1f(props_.uRoll, 0.f);
     drawGroups(lists_, false);
+    if (ghostOn_) {
+        glUniform4f(props_.uGhost, ghostCol_[0], ghostCol_[1], ghostCol_[2], 0.50f);
+        drawGroups(ghostLists_, false);
+        glUniform4f(props_.uGhost, 0.f, 0.f, 0.f, 0.f);
+    }
+    if (vm_.on && vm_.model >= 0) {
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glUniform1f(props_.uPitch, vm_.pitch);
+        glUniform1f(props_.uRoll, vm_.roll);
+        drawGroups(vmLists_, false);
+        glUniform1f(props_.uPitch, 0.f);
+        glUniform1f(props_.uRoll, 0.f);
+    }
     glBindVertexArray(0);
     glDisable(GL_CULL_FACE);
 

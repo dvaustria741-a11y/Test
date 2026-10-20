@@ -40,7 +40,7 @@ bool pakParse(std::vector<uint8_t>&& data, Pak& out) {
     Reader r{out.blob.data(), out.blob.size()};
     char magic[4];
     r.bytes(magic, 4);
-    if (std::memcmp(magic, "NPK2", 4) != 0) { plat_log("pak: bad magic"); return false; }
+    if (std::memcmp(magic, "NPK3", 4) != 0) { plat_log("pak: bad magic"); return false; }
     uint32_t modelCount = r.get<uint32_t>();
     uint32_t matCount = r.get<uint32_t>();
     if (modelCount > 1024 || matCount > 256) return false;
@@ -51,7 +51,12 @@ bool pakParse(std::vector<uint8_t>&& data, Pak& out) {
         r.bytes(m.tex, 32);
         m.size = r.get<uint32_t>();
         m.alpha = r.get<uint32_t>();
-        m.tint = r.get<uint32_t>();
+        m.vcol = r.get<uint32_t>();
+        m.dbl = r.get<uint32_t>();
+        m.boost = r.get<float>();
+        m.sway = r.get<float>();
+        m.aoMin = r.get<float>();
+        m.soft = r.get<float>();
     }
     out.models.resize(modelCount);
     for (auto& md : out.models) {
