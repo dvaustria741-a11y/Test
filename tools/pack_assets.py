@@ -12,6 +12,7 @@ ap.add_argument('--props-tex', default='props/Textures')
 ap.add_argument('--village-gltf', default='vill/Medieval Village MegaKit[Standard]/glTF')
 ap.add_argument('--village-tex', default='vill/Medieval Village MegaKit[Standard]/Textures')
 ap.add_argument('--survival-obj', default='surv/Survival Pack - Sept 2020/OBJ')
+ap.add_argument('--animals-gltf', default='')
 ap.add_argument('--out', default='app/src/main/assets')
 A = ap.parse_args()
 
@@ -64,7 +65,16 @@ PROPS = ['Axe_Bronze', 'Pickaxe_Bronze', 'Sword_Bronze', 'Torch_Metal', 'Workben
          'Bed_Twin1', 'Stool', 'Table_Large', 'Bench', 'Chair_1', 'Cauldron', 'Carrot', 'Bag', 'Bucket_Wooden_1', 'Rope_1']
 VILLAGE = ['Floor_WoodDark', 'Floor_WoodLight', 'Wall_Plaster_Straight', 'Wall_Plaster_Door_Flat', 'Wall_Plaster_Window_Wide_Flat',
            'Wall_UnevenBrick_Straight', 'Wall_UnevenBrick_Door_Flat', 'Wall_UnevenBrick_Window_Wide_Flat',
-           'Prop_WoodenFence_Single', 'Roof_Wooden_2x1']
+           'Prop_WoodenFence_Single', 'Roof_Wooden_2x1', 'Roof_Wooden_2x1_Middle', 'Stair_Interior_Solid']
+WALLS = {
+    'Wall_Plaster_Straight': ('Plaster', 'straight'), 'Wall_Plaster_Door_Flat': ('Plaster', 'door'),
+    'Wall_Plaster_Window_Wide_Flat': ('Plaster', 'window'), 'Wall_UnevenBrick_Straight': ('UnevenBrick', 'straight'),
+    'Wall_UnevenBrick_Door_Flat': ('UnevenBrick', 'door'), 'Wall_UnevenBrick_Window_Wide_Flat': ('UnevenBrick', 'window'),
+}
+FLOORS = ['Floor_WoodDark', 'Floor_WoodLight']
+ANIMALS = [('Animal_Wolf', 56, 1.5), ('Animal_WolfWhite', 133, 1.5), ('Animal_Bear', 27, 2.0), ('Animal_Deer', 122, 1.9),
+           ('Animal_Stag', 41, 1.7), ('Animal_Doe', 123, 1.6), ('Animal_Boar', 77, 1.4), ('Animal_Rabbit', 66, 0.45),
+           ('Animal_Fox', 84, 0.9), ('Animal_Cow', 32, 2.3)]
 SURVIVAL = [('Bonfire', 0.5), ('Bonfire_Fire', 0.5), ('WoodLog', 0.35), ('WoodenTorch', 0.3), ('WoodenTorch_Fire', 0.3),
             ('Tent', 0.14), ('Bandages', 1.5), ('WaterBottle_1', 0.8), ('Can_Closed', 1.2), ('FirstAidKit', 0.6), ('Backpack', 0.3)]
 SKIP = ('Petal_',)
@@ -170,6 +180,98 @@ def load_obj(path, scale):
     return [('Flat', pos, nrm, uv, col, np.array(idx, np.uint32))]
 
 
+def box_sub(mat, x0, x1, y0, y1, z0, z1, su=0.5, sv=0.4, faces='xXyYzZ', band=None):
+    P, N, UV, I = [], [], [], []
+    def quad(p0, p1, p2, p3, n, uvs):
+        base = len(P)
+        P.extend([p0, p1, p2, p3]); N.extend([n] * 4); UV.extend(uvs)
+        I.extend([base, base + 1, base + 2, base, base + 2, base + 3])
+    def uvband(y, ya, yb):
+        return band[0] + (band[1] - band[0]) * (y - ya) / (yb - ya)
+    if 'z' in faces:
+        a = [(x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)]
+        quad(*a, (0, 0, 1), [(p[0] * su, p[1] * sv) for p in a])
+    if 'Z' in faces:
+        a = [(x1, y0, z0), (x0, y0, z0), (x0, y1, z0), (x1, y1, z0)]
+        quad(*a, (0, 0, -1), [(p[0] * su, p[1] * sv) for p in a])
+    if 'x' in faces:
+        a = [(x1, y0, z1), (x1, y0, z0), (x1, y1, z0), (x1, y1, z1)]
+        quad(*a, (1, 0, 0), [(p[2] * su, uvband(p[1], y0, y1) if band else p[1] * sv) for p in a])
+    if 'X' in faces:
+        a = [(x0, y0, z0), (x0, y0, z1), (x0, y1, z1), (x0, y1, z0)]
+        quad(*a, (-1, 0, 0), [(p[2] * su, uvband(p[1], y0, y1) if band else p[1] * sv) for p in a])
+    if 'y' in faces:
+        a = [(x0, y1, z1), (x1, y1, z1), (x1, y1, z0), (x0, y1, z0)]
+        quad(*a, (0, 1, 0), [(p[0] * su, p[2] * sv) for p in a])
+    if 'Y' in faces:
+        a = [(x0, y0, z0), (x1, y0, z0), (x1, y0, z1), (x0, y0, z1)]
+        quad(*a, (0, -1, 0), [(p[0] * su, p[2] * sv) for p in a])
+    if 'x' in faces or 'X' in faces:
+        pass
+    pos = np.array(P, np.float32)
+    nrm = np.array(N, np.float32)
+    uv = np.array(UV, np.float32)
+    if band:
+        uv[:, 0] = np.where(uv[:, 0] < 0, uv[:, 0] + 8, uv[:, 0]) % 1.0
+    col = np.ones((len(pos), 4), np.float32)
+    return (mat, pos, nrm, uv, col, np.array(I, np.uint32))
+
+
+def thick_wall(name, mat, kind):
+    subs = load_gltf(os.path.join(A.village_gltf, name + '.gltf'))
+    su = 0.5 if mat == 'Plaster' else 0.66
+    sv = 0.4 if mat == 'Plaster' else 0.66
+    z0, z1, top = 0.03, 0.30, 3.1
+    if kind == 'straight':
+        parts = [(-1, 1, 0, top)]
+    elif kind == 'door':
+        parts = [(-1, -0.62, 0, top), (0.62, 1, 0, top), (-0.62, 0.62, 2.18, top)]
+    else:
+        parts = [(-1, -0.6, 0, top), (0.6, 1, 0, top), (-0.6, 0.6, 0, 1.05), (-0.6, 0.6, 2.3, top)]
+    for (xa, xb, ya, yb) in parts:
+        subs.append(box_sub(mat, xa, xb, ya, yb, z0, z1, su, sv))
+    return subs
+
+
+def thick_floor(name):
+    subs = load_gltf(os.path.join(A.village_gltf, name + '.gltf'))
+    subs.append(box_sub('WoodTrim', -1, 1, -1.0, -0.012, -1, 1, 0.5, 0.4, faces='xXzZY', band=(0.34, 0.52)))
+    return subs
+
+
+def load_animals():
+    out = []
+    if not A.animals_gltf:
+        return out
+    j = json.load(open(A.animals_gltf))
+    gdir = os.path.dirname(A.animals_gltf)
+    bins = [open(os.path.join(gdir, b['uri']), 'rb').read() for b in j['buffers']]
+    mesh_nodes = [n for n in j['nodes'] if 'mesh' in n]
+    for (name, idx, target) in ANIMALS:
+        n = mesh_nodes[idx]
+        m = j['meshes'][n['mesh']]
+        Ps, Ns, Cs, Is, off = [], [], [], [], 0
+        for p in m['primitives']:
+            pos = read_acc(j, bins, p['attributes']['POSITION']).astype(np.float32)
+            nrm = read_acc(j, bins, p['attributes']['NORMAL']).astype(np.float32)
+            col = read_acc(j, bins, p['attributes']['COLOR_0']).astype(np.float32)
+            if col.max() > 1.5:
+                col = col / 255.0
+            col = np.concatenate([col[:, :3], np.ones((len(col), 1), np.float32)], axis=1)
+            ii = read_acc(j, bins, p['indices']).reshape(-1).astype(np.uint32) + off
+            Ps.append(pos); Ns.append(nrm); Cs.append(col); Is.append(ii); off += len(pos)
+        pos = np.concatenate(Ps); nrm = np.concatenate(Ns); col = np.concatenate(Cs); idxs = np.concatenate(Is)
+        zlen = float(pos[:, 2].max() - pos[:, 2].min())
+        sc = target / zlen
+        pos = pos * sc
+        pos[:, 0] -= (pos[:, 0].max() + pos[:, 0].min()) * 0.5
+        pos[:, 2] -= (pos[:, 2].max() + pos[:, 2].min()) * 0.5
+        pos[:, 1] -= pos[:, 1].min()
+        uv = np.zeros((len(pos), 2), np.float32)
+        out.append((name, [('Flat', pos, nrm, uv, col, idxs)]))
+    return out
+
+
 def simplify_sub(pos, nrm, uv, idx, ratio):
     target = max(int(len(idx) * ratio) // 3 * 3, min(len(idx), 36))
     attrs = np.ascontiguousarray(np.concatenate([nrm, uv], axis=1).astype(np.float32))
@@ -235,9 +337,16 @@ def build_models():
     for n in PROPS:
         models.append(make_model(n, load_gltf(os.path.join(A.props_gltf, n + '.gltf')), False))
     for n in VILLAGE:
-        models.append(make_model(n, load_gltf(os.path.join(A.village_gltf, n + '.gltf')), False))
+        if n in WALLS:
+            models.append(make_model(n, thick_wall(n, *WALLS[n]), False))
+        elif n in FLOORS:
+            models.append(make_model(n, thick_floor(n), False))
+        else:
+            models.append(make_model(n, load_gltf(os.path.join(A.village_gltf, n + '.gltf')), False))
     for n, sc in SURVIVAL:
         models.append(make_model(n, load_obj(os.path.join(A.survival_obj, n + '.obj'), sc), False))
+    for n, subs in load_animals():
+        models.append(make_model(n, subs, False))
     return models
 
 
@@ -352,7 +461,7 @@ def main():
     with open(os.path.join(A.out, 'models.txt'), 'w') as f:
         f.write('\n'.join(m[0] for m in models))
     for (name, mn, mx, lods) in models:
-        if name in PROPS or name in VILLAGE or name in [x[0] for x in SURVIVAL]:
+        if name in PROPS or name in VILLAGE or name in [x[0] for x in SURVIVAL] or name.startswith('Animal_'):
             print('M', name, [sum(len(s[5]) // 3 for s in lod) for lod in lods], 'min', np.round(mn, 2).tolist(), 'max', np.round(mx, 2).tolist())
 
 

@@ -309,7 +309,7 @@ void Game::drawHUD() {
     rend_.uiText("MAKE", buildCX_, buildCY_ - 12.f * u_, 24.f * u_, 1.f, 0.97f, 0.86f, 1.f, 1);
 
     if (buildActive_) {
-        struct B { float x, y; const char* l; } bs[3] = {{rotCX_, rotCY_, "TURN"}, {delCX_, delCY_, "DEL"}, {cancelCX_, cancelCY_, "X"}};
+        struct B { float x, y; const char* l; } bs[5] = {{rotCX_, rotCY_, "TURN"}, {delCX_, delCY_, "DEL"}, {cancelCX_, cancelCY_, "X"}, {lvlUpCX_, lvlUpCY_, "UP"}, {lvlDnCX_, lvlDnCY_, "DOWN"}};
         for (auto& b : bs) {
             rend_.uiShape(0, b.x - subR_, b.y - subR_, subR_ * 2, subR_ * 2, 0.08f, 0.18f, 0.12f, 0.85f);
             rend_.uiShape(1, b.x - subR_, b.y - subR_, subR_ * 2, subR_ * 2, 1.f, 0.85f, 0.4f, 0.9f, 0.06f);
@@ -318,11 +318,17 @@ void Game::drawHUD() {
     }
 
     float cx = W * 0.5f, cy = H * 0.5f;
-    bool reach = target_.valid;
+    bool animalT = animalIdx_ >= 0 && (!target_.valid || animalDist_ <= target_.t + 0.2f);
+    bool reach = target_.valid || animalT;
     float cs = (reach ? 12.f : 7.f) * u_;
     rend_.uiShape(0, cx - cs, cy - cs, cs * 2, cs * 2, reach ? 1.f : 1.f, reach ? 0.95f : 1.f, reach ? 0.5f : 1.f, reach ? 0.95f : 0.7f);
     rend_.uiShape(0, cx - cs * 0.45f, cy - cs * 0.45f, cs * 0.9f, cs * 0.9f, 0.f, 0.f, 0.f, 0.35f);
-    if (reach) {
+    if (animalT) {
+        const Animal& an = animals_[(size_t)animalIdx_];
+        const AnimalDef& ad = kAnimals[an.type];
+        rend_.uiText(ad.name, cx, cy + 34.f * u_, 30.f * u_, 1.f, 0.7f, 0.6f, 0.95f, 1);
+        bar(cx - 90.f * u_, cy + 72.f * u_, 180.f * u_, 18.f * u_, an.hp / ad.hp, 0.9f, 0.3f, 0.3f);
+    } else if (reach) {
         const char* nm = target_.kind == HK_TREE || target_.kind == HK_DEAD ? "TREE" : (target_.kind == HK_ROCK ? "ROCK" : (target_.kind == HK_MUSH ? "MUSHROOM" : "STONE"));
         rend_.uiText(nm, cx, cy + 34.f * u_, 30.f * u_, 1, 1, 1, 0.95f, 1);
         uint64_t key = propKey(target_.p.x, target_.p.z, target_.p.model);
@@ -332,9 +338,9 @@ void Game::drawHUD() {
     }
     if (buildActive_ && ghostOn_) {
         const PlaceDef& pd = kPlace[buildPiece_];
-        char buf[64];
-        if (pd.wood || pd.stone) std::snprintf(buf, sizeof(buf), "%s  W%d S%d", pd.name, pd.wood, pd.stone);
-        else std::snprintf(buf, sizeof(buf), "%s", pd.name);
+        char buf[80];
+        if (pd.wood || pd.stone) std::snprintf(buf, sizeof(buf), "%s  W%d S%d  LEVEL %d", pd.name, pd.wood, pd.stone, buildLevel_ + 1);
+        else std::snprintf(buf, sizeof(buf), "%s  LEVEL %d", pd.name, buildLevel_ + 1);
         rend_.uiText(buf, cx, H * 0.14f, 36.f * u_, ghostValid_ ? 0.7f : 1.f, ghostValid_ ? 1.f : 0.5f, ghostValid_ ? 0.6f : 0.4f, 1.f, 1);
     }
 
@@ -431,10 +437,11 @@ void Game::drawBag() {
         ry += rh + 10.f * u_;
     }
     if (nearCampfire(4.5f)) {
-        bool ok = inv_[IT_MUSH] > 0;
+        bool ok = inv_[IT_MUSH] > 0 || inv_[IT_MEAT] > 0;
+        const char* cookLabel = inv_[IT_MEAT] > 0 ? "COOK MEAT" : "COOK MUSHROOM";
         bool pressed = uiDown_ && uiInside(uiX_, uiY_, rx, ry, rw, rh) && uiInside(uiSX_, uiSY_, rx, ry, rw, rh);
         rend_.uiShape(2, rx, ry, rw, rh, ok ? (pressed ? 0.7f : 0.85f) : 0.3f, ok ? (pressed ? 0.35f : 0.45f) : 0.2f, 0.12f, 0.92f * pp, 0.3f);
-        rend_.uiText("COOK MUSHROOM", rx + 24.f * u_, ry + 18.f * u_, 36.f * u_, 1.f, 0.97f, 0.86f, ok ? pp : pp * 0.5f, 0);
+        rend_.uiText(cookLabel, rx + 24.f * u_, ry + 18.f * u_, 36.f * u_, 1.f, 0.97f, 0.86f, ok ? pp : pp * 0.5f, 0);
         if (clickIn(rx, ry, rw, rh) && ok) cook();
     } else {
         rend_.uiText("STAND NEAR A CAMPFIRE TO COOK", rx, ry + 16.f * u_, 26.f * u_, 1, 1, 1, pp * 0.55f, 0);
@@ -458,32 +465,33 @@ void Game::drawBuildMenu() {
     char have[64];
     std::snprintf(have, sizeof(have), "WOOD %d   STONE %d", inv_[IT_WOOD], inv_[IT_STONE]);
     rend_.uiText(have, px + pw * 0.5f, py + 110.f * u_, 30.f * u_, 1.f, 0.85f, 0.4f, pp, 1);
-    float cw = 330.f * u_, ch = 150.f * u_, gx = 26.f * u_, gy = 22.f * u_;
+    float cw = 330.f * u_, ch = 128.f * u_, gx = 26.f * u_, gy = 18.f * u_;
     int cols = 4;
-    float x0 = px + (pw - ((float)cols * cw + (float)(cols - 1) * gx)) * 0.5f, y0 = py + 170.f * u_;
+    float x0 = px + (pw - ((float)cols * cw + (float)(cols - 1) * gx)) * 0.5f, y0 = py + 160.f * u_;
     for (int i = 0; i < kBuildPieces; i++) {
         const PlaceDef& pd = kPlace[i];
         float x = x0 + (float)(i % cols) * (cw + gx), y = y0 + (float)(i / cols) * (ch + gy);
         bool ok = canAfford(pd);
         bool pressed = uiDown_ && uiInside(uiX_, uiY_, x, y, cw, ch) && uiInside(uiSX_, uiSY_, x, y, cw, ch);
         rend_.uiShape(2, x, y, cw, ch, ok ? (pressed ? 0.26f : 0.34f) : 0.12f, ok ? (pressed ? 0.55f : 0.66f) : 0.2f, ok ? 0.2f : 0.16f, 0.92f * pp, 0.2f);
-        rend_.uiText(pd.name, x + cw * 0.5f, y + 30.f * u_, 32.f * u_, 1.f, 0.97f, 0.86f, ok ? pp : pp * 0.5f, 1);
+        rend_.uiText(pd.name, x + cw * 0.5f, y + 24.f * u_, 30.f * u_, 1.f, 0.97f, 0.86f, ok ? pp : pp * 0.5f, 1);
         char cost[32];
         if (pd.wood && pd.stone) std::snprintf(cost, sizeof(cost), "W%d S%d", pd.wood, pd.stone);
         else if (pd.wood) std::snprintf(cost, sizeof(cost), "WOOD %d", pd.wood);
         else std::snprintf(cost, sizeof(cost), "STONE %d", pd.stone);
-        rend_.uiText(cost, x + cw * 0.5f, y + 84.f * u_, 28.f * u_, 1, 1, 1, ok ? pp * 0.95f : pp * 0.5f, 1);
+        rend_.uiText(cost, x + cw * 0.5f, y + 74.f * u_, 28.f * u_, 1, 1, 1, ok ? pp * 0.95f : pp * 0.5f, 1);
         if (clickIn(x, y, cw, ch)) {
             buildActive_ = true;
             buildPiece_ = i;
             buildFlip_ = 0;
+            buildLevel_ = 0;
             screen_ = S_PLAY;
             screenT_ = 0;
             clearTouches();
             return;
         }
     }
-    rend_.uiText("PLACED PIECES SNAP TO A 2 METER GRID. USE TURN TO FLIP.", px + pw * 0.5f, py + ph - 190.f * u_, 24.f * u_, 1, 1, 1, pp * 0.7f, 1);
+    rend_.uiText("PIECES SNAP TO A 2 METER GRID. TURN FLIPS. UP AND DOWN CHANGE LEVEL.", px + pw * 0.5f, py + ph - 175.f * u_, 24.f * u_, 1, 1, 1, pp * 0.7f, 1);
     if (button(px + (pw - 380.f * u_) * 0.5f, py + ph - 130.f * u_, 380.f * u_, 96.f * u_, "CLOSE", true, pp)) {
         screen_ = S_PLAY;
         screenT_ = 0;

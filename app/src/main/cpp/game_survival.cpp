@@ -12,6 +12,7 @@ const float kPi = 3.14159265f;
 void Game::initSurvival() {
     mAxe_ = pak_.find("Axe_Bronze");
     mPick_ = pak_.find("Pickaxe_Bronze");
+    mSword_ = pak_.find("Sword_Bronze");
     mTorch_ = pak_.find("WoodenTorch");
     mTorchFire_ = pak_.find("WoodenTorch_Fire");
     std::memset(inv_, 0, sizeof(inv_));
@@ -41,7 +42,7 @@ void Game::rebuildHotbar() {
     int keep = currentItem();
     hotbar_.clear();
     hotbar_.push_back(-1);
-    static const int order[] = {IT_AXE, IT_PICK, IT_TORCH, IT_CAMPFIRE, IT_BENCH, IT_BED, IT_CHEST, IT_MUSH, IT_COOKED};
+    static const int order[] = {IT_AXE, IT_PICK, IT_SWORD, IT_TORCH, IT_CAMPFIRE, IT_BENCH, IT_BED, IT_CHEST, IT_MUSH, IT_COOKED, IT_MEAT, IT_COOKMEAT};
     for (int it : order) if (inv_[it] > 0) hotbar_.push_back(it);
     sel_ = 0;
     for (size_t i = 0; i < hotbar_.size(); i++) if (hotbar_[i] == keep) sel_ = (int)i;
@@ -77,11 +78,20 @@ bool Game::nearCampfire(float radius) const {
 }
 
 bool Game::cook() {
-    if (!nearCampfire(4.5f) || inv_[IT_MUSH] <= 0) return false;
-    inv_[IT_MUSH]--;
-    giveItem(IT_COOKED, 1);
-    addPopup("COOKED", 1.f, 0.7f, 0.3f);
-    return true;
+    if (!nearCampfire(4.5f)) return false;
+    if (inv_[IT_MEAT] > 0) {
+        inv_[IT_MEAT]--;
+        giveItem(IT_COOKMEAT, 1);
+        addPopup("COOKED MEAT", 1.f, 0.7f, 0.3f);
+        return true;
+    }
+    if (inv_[IT_MUSH] > 0) {
+        inv_[IT_MUSH]--;
+        giveItem(IT_COOKED, 1);
+        addPopup("COOKED", 1.f, 0.7f, 0.3f);
+        return true;
+    }
+    return false;
 }
 
 void Game::damagePlayer(float amt) {
@@ -91,12 +101,13 @@ void Game::damagePlayer(float amt) {
 
 void Game::respawn() {
     pos_ = spawn_;
-    pos_.y = groundAt(pos_.x, pos_.z);
+    pos_.y = world_.height(pos_.x, pos_.z);
     health_ = 70.f;
     hunger_ = 70.f;
     inv_[IT_WOOD] /= 2;
     inv_[IT_STONE] /= 2;
     if (tod_ > 0.75f || tod_ < 0.22f) tod_ = 0.30f;
+    animals_.clear();
     hotbarDirty_ = true;
     clearTouches();
     screen_ = S_PLAY;
@@ -186,11 +197,12 @@ void Game::updateLights(const Camera& cam) {
 void Game::updateViewModel(const Camera& cam) {
     ViewModelState vm;
     int it = currentItem();
-    if (!buildActive_ && (it == IT_AXE || it == IT_PICK || it == IT_TORCH)) {
+    if (!buildActive_ && (it == IT_AXE || it == IT_PICK || it == IT_TORCH || it == IT_SWORD)) {
         float sw = swingT_ >= 0.f ? std::sin(swingT_ * kPi) : 0.f;
         float scale = 1.f, yawOff = 0.f, roll = 0.f, pitchOff = -0.3f;
         if (it == IT_AXE) { vm.model = mAxe_; scale = 0.75f; yawOff = -kPi * 0.5f; roll = -kPi * 0.5f; pitchOff = -0.35f; }
         else if (it == IT_PICK) { vm.model = mPick_; scale = 0.7f; yawOff = kPi * 0.5f; roll = 0.f; pitchOff = -0.35f; }
+        else if (it == IT_SWORD) { vm.model = mSword_; scale = 0.8f; yawOff = 0.f; roll = 0.f; pitchOff = -0.6f; }
         else { vm.model = mTorch_; vm.fire = mTorchFire_; scale = 1.0f; pitchOff = -0.25f; }
         if (vm.model >= 0) {
             float cp = std::cos(cam.pitch), sp = std::sin(cam.pitch);
@@ -226,9 +238,9 @@ static int hpFor(int kind) {
 
 static int damageFor(int kind, int tool) {
     switch (kind) {
-        case HK_TREE: return tool == IT_AXE ? 34 : (tool == IT_PICK ? 10 : (tool == IT_TORCH ? 5 : 12));
-        case HK_DEAD: return tool == IT_AXE ? 50 : (tool == IT_PICK ? 16 : 20);
-        case HK_ROCK: return tool == IT_PICK ? 28 : (tool == IT_AXE ? 6 : 8);
+        case HK_TREE: return tool == IT_AXE ? 34 : (tool == IT_PICK ? 10 : (tool == IT_SWORD ? 8 : (tool == IT_TORCH ? 5 : 12)));
+        case HK_DEAD: return tool == IT_AXE ? 50 : (tool == IT_PICK ? 16 : (tool == IT_SWORD ? 10 : 20));
+        case HK_ROCK: return tool == IT_PICK ? 28 : (tool == IT_AXE ? 6 : (tool == IT_SWORD ? 3 : 8));
         default: return 100;
     }
 }
@@ -260,21 +272,24 @@ void Game::doAct() {
     for (const Placed& p : placed_) {
         if (p.def != PD_BED) continue;
         float dx = p.x - pos_.x, dz = p.z - pos_.z;
-        if (dx * dx + dz * dz < 2.8f * 2.8f && !target_.valid) {
+        if (dx * dx + dz * dz < 2.8f * 2.8f && !target_.valid && animalIdx_ < 0) {
             sleepInBed();
             cooldown_ = 1.0f;
             return;
         }
     }
     swingT_ = 0.f;
-    cooldown_ = 0.42f;
+    cooldown_ = it == IT_SWORD ? 0.34f : 0.42f;
+    bool animalFirst = animalIdx_ >= 0 && (!target_.valid || animalDist_ <= target_.t + 0.2f);
+    if (animalFirst) {
+        float dmg = it == IT_SWORD ? 36.f : (it == IT_AXE ? 22.f : (it == IT_PICK ? 14.f : (it == IT_TORCH ? 10.f : 7.f)));
+        kick_ += 0.03f;
+        hitAnimal(animalIdx_, dmg);
+        return;
+    }
     if (!target_.valid) return;
     int kind = target_.kind;
     int dmg = damageFor(kind, it);
-    if (dmg <= 0) {
-        addPopup("NEED A PICKAXE", 1.f, 0.6f, 0.4f);
-        return;
-    }
     kick_ += 0.035f;
     uint64_t key = propKey(target_.p.x, target_.p.z, target_.p.model);
     int cur;
@@ -298,41 +313,64 @@ void Game::doAct() {
     target_ = PropHit();
 }
 
-float Game::floorTop(float x, float z) const {
+float Game::floorTop(float x, float z, float ref) const {
     float best = -1e9f;
     for (const Placed& p : placed_) {
-        if (std::fabs(p.x - x) > 1.0f || std::fabs(p.z - z) > 1.0f) continue;
-        if (kPlace[p.def].kind != PK_FLOOR) continue;
-        best = std::max(best, p.y + 0.02f);
+        const PlaceDef& pd = kPlace[p.def];
+        if (pd.kind == PK_FLOOR) {
+            if (std::fabs(p.x - x) > 1.0f || std::fabs(p.z - z) > 1.0f) continue;
+            float top = p.y + 0.02f;
+            if (top <= ref + 0.6f) best = std::max(best, top);
+        } else if (pd.ramp) {
+            float dx = x - p.x, dz = z - p.z;
+            float c = std::cos(p.yaw), s = std::sin(p.yaw);
+            float lx = c * dx - s * dz, lz = s * dx + c * dz;
+            if (std::fabs(lx) > kStairHalfW || lz > 0.36f || lz < -4.35f) continue;
+            float t = clampf((0.3f - lz) / kStairRun, 0.f, 1.f);
+            float top = p.y + kStairRise * t;
+            if (top <= ref + 0.6f) best = std::max(best, top);
+        }
     }
     return best;
 }
 
-float Game::groundAt(float x, float z) const {
-    return std::max(world_.height(x, z), floorTop(x, z));
+float Game::groundAt(float x, float z, float ref) const {
+    return std::max(world_.height(x, z), floorTop(x, z, ref));
 }
 
 bool Game::aimGround(V3& out) const {
     Camera c = playCamera();
     V3 d = camForward();
+    float ref = pos_.y;
     float prev = 0.6f;
     for (float t = 0.6f; t <= 8.f; t += 0.2f) {
         V3 p = c.pos + d * t;
-        float g = groundAt(p.x, p.z);
+        float g = groundAt(p.x, p.z, ref);
         if (p.y <= g) {
             float lo = prev, hi = t;
             for (int i = 0; i < 6; i++) {
                 float mid = 0.5f * (lo + hi);
                 V3 q = c.pos + d * mid;
-                if (q.y <= groundAt(q.x, q.z)) hi = mid; else lo = mid;
+                if (q.y <= groundAt(q.x, q.z, ref)) hi = mid; else lo = mid;
             }
             V3 q = c.pos + d * hi;
-            out = {q.x, groundAt(q.x, q.z), q.z};
+            out = {q.x, groundAt(q.x, q.z, ref), q.z};
             return true;
         }
         prev = t;
     }
     return false;
+}
+
+bool Game::aimPlane(float y, V3& out) const {
+    Camera c = playCamera();
+    V3 d = camForward();
+    if (std::fabs(d.y) < 0.04f) return false;
+    float t = (y - c.pos.y) / d.y;
+    if (t < 0.8f || t > 10.f) return false;
+    V3 p = c.pos + d * t;
+    out = {p.x, y, p.z};
+    return true;
 }
 
 void Game::computeGhost() {
@@ -349,14 +387,18 @@ void Game::computeGhost() {
     const PlaceDef& pd = kPlace[def];
     int model = modelOf(pd.model);
     if (model < 0) return;
+    const int level = buildActive_ ? buildLevel_ : 0;
+    const float ref = pos_.y;
+    const float planeY = ref + (float)level * kLevelH;
     V3 P;
-    bool hit = aimGround(P);
+    bool hit = level > 0 ? aimPlane(planeY, P) : aimGround(P);
     if (!hit) {
         V3 f = camForward();
         float l = std::sqrt(f.x * f.x + f.z * f.z);
         if (l < 1e-3f) return;
         P = {pos_.x + f.x / l * 4.f, 0.f, pos_.z + f.z / l * 4.f};
-        P.y = groundAt(P.x, P.z);
+        P.y = level > 0 ? planeY : groundAt(P.x, P.z, ref);
+        if (level > 0) return;
     }
     PropInst g{};
     g.model = (uint16_t)model;
@@ -364,16 +406,9 @@ void Game::computeGhost() {
     g.tint = 0xFFFFFFFFu;
     bool ok = canAfford(pd);
     float pdx = P.x - pos_.x, pdz = P.z - pos_.z;
-    if (pdx * pdx + pdz * pdz > 9.5f * 9.5f) ok = false;
+    if (pdx * pdx + pdz * pdz > 10.f * 10.f) ok = false;
     if (pd.kind == PK_FLOOR) {
         float cx = std::round(P.x / 2.f) * 2.f, cz = std::round(P.z / 2.f) * 2.f;
-        float y = -1e9f;
-        bool occupied = false;
-        for (const Placed& p : placed_) {
-            if (kPlace[p.def].kind != PK_FLOOR) continue;
-            if (std::fabs(p.x - cx) < 0.5f && std::fabs(p.z - cz) < 0.5f) occupied = true;
-            if (std::fabs(p.x - cx) <= 2.05f && std::fabs(p.z - cz) <= 2.05f) y = std::max(y, p.y);
-        }
         float hmax = -1e9f, hmin = 1e9f;
         for (int i = 0; i < 5; i++) {
             float hx = cx + (i == 1 ? -1.f : (i == 2 ? 1.f : 0.f)), hz = cz + (i == 3 ? -1.f : (i == 4 ? 1.f : 0.f));
@@ -381,10 +416,36 @@ void Game::computeGhost() {
             hmax = std::max(hmax, h);
             hmin = std::min(hmin, h);
         }
-        if (y < -1e8f) y = hmax + 0.06f;
-        if (hmax - hmin > 1.6f) ok = false;
-        if (y - hmin > 2.2f) ok = false;
-        if (occupied) ok = false;
+        float y;
+        bool supported = false;
+        if (level == 0) {
+            float ty = hmax + 0.2f;
+            y = ty;
+            for (const Placed& p : placed_) {
+                if (kPlace[p.def].kind != PK_FLOOR) continue;
+                if (std::fabs(p.x - cx) <= 2.05f && std::fabs(p.z - cz) <= 2.05f && std::fabs(p.y - ty) < 1.6f) { y = p.y; break; }
+            }
+            supported = true;
+            if (hmax - hmin > 1.6f) ok = false;
+        } else {
+            y = planeY;
+            float ex[4] = {cx, cx, cx - 1.f, cx + 1.f}, ez[4] = {cz - 1.f, cz + 1.f, cz, cz};
+            for (const Placed& p : placed_) {
+                const PlaceDef& q = kPlace[p.def];
+                if (q.kind == PK_EDGE && q.coll != CK_NONE) {
+                    for (int i = 0; i < 4; i++)
+                        if (std::fabs(p.x - ex[i]) < 0.4f && std::fabs(p.z - ez[i]) < 0.4f && std::fabs(p.y + 3.1f - planeY) < 1.2f) { y = p.y + 3.1f; supported = true; }
+                } else if (q.kind == PK_FLOOR && std::fabs(p.x - cx) <= 2.05f && std::fabs(p.z - cz) <= 2.05f && std::fabs(p.y - planeY) < 1.6f) {
+                    y = p.y;
+                    supported = true;
+                }
+            }
+        }
+        if (!supported) ok = false;
+        for (const Placed& p : placed_) {
+            if (kPlace[p.def].kind != PK_FLOOR) continue;
+            if (std::fabs(p.x - cx) < 0.5f && std::fabs(p.z - cz) < 0.5f && std::fabs(p.y - y) < 1.0f) ok = false;
+        }
         g.x = cx; g.y = y; g.z = cz; g.yaw = 0.f;
     } else if (pd.kind == PK_EDGE) {
         float tx = std::round(P.x / 2.f) * 2.f, tz = std::round(P.z / 2.f) * 2.f;
@@ -400,39 +461,67 @@ void Game::computeGhost() {
         bool alongX = ax[bi];
         float yaw = alongX ? 0.f : kPi * 0.5f;
         if (buildFlip_ & 1) yaw += kPi;
-        float fy = -1e9f;
+        float refY = level > 0 ? planeY : world_.height(x, z) + 0.2f;
+        float fy = -1e9f, fd = 1e9f;
         for (const Placed& p : placed_) {
             if (kPlace[p.def].kind != PK_FLOOR) continue;
-            if (std::fabs(p.x - x) <= 1.05f && std::fabs(p.z - z) <= 1.05f) fy = std::max(fy, p.y);
+            if (std::fabs(p.x - x) <= 1.05f && std::fabs(p.z - z) <= 1.05f) {
+                float d = std::fabs(p.y - refY);
+                if (d < 1.6f && d < fd) { fd = d; fy = p.y; }
+            }
         }
-        float base;
-        if (fy > -1e8f) base = fy;
-        else {
+        float base = 0.f;
+        bool haveBase = false;
+        if (fy > -1e8f) { base = fy; haveBase = true; }
+        else if (level == 0) {
             float h0 = world_.height(x, z);
             float h1 = world_.height(x + (alongX ? 1.f : 0.f), z + (alongX ? 0.f : 1.f));
             float h2 = world_.height(x - (alongX ? 1.f : 0.f), z - (alongX ? 0.f : 1.f));
             base = std::max(h0, std::max(h1, h2));
             if (base - std::min(h0, std::min(h1, h2)) > 1.4f) ok = false;
+            haveBase = true;
+        } else {
+            for (const Placed& p : placed_) {
+                const PlaceDef& q = kPlace[p.def];
+                if (q.kind != PK_EDGE || q.coll == CK_NONE) continue;
+                bool pAlongX = std::fabs(std::sin(p.yaw)) < 0.5f;
+                if (pAlongX == alongX && std::fabs(p.x - x) < 0.3f && std::fabs(p.z - z) < 0.3f && std::fabs(p.y + 3.1f - planeY) < 1.2f) { base = p.y + 3.1f; haveBase = true; }
+            }
         }
-        g.x = x; g.z = z; g.y = base + pd.yOff; g.yaw = yaw;
+        if (!haveBase) { ok = false; base = planeY; }
+        float px = x, pz = z;
+        if (pd.inset > 0.f) {
+            px = x - pd.inset * std::sin(yaw);
+            pz = z - pd.inset * std::cos(yaw);
+        }
+        g.x = px; g.z = pz; g.y = base + pd.yOff; g.yaw = yaw;
         for (const Placed& p : placed_) {
             if (kPlace[p.def].kind != PK_EDGE) continue;
             bool pAlongX = std::fabs(std::sin(p.yaw)) < 0.5f;
-            if (pAlongX == alongX && std::fabs(p.x - x) < 0.3f && std::fabs(p.z - z) < 0.3f && std::fabs(p.y - g.y) < 0.5f) ok = false;
+            if (pAlongX == alongX && std::fabs(p.x - px) < 0.3f && std::fabs(p.z - pz) < 0.3f && std::fabs(p.y - g.y) < 0.5f) ok = false;
         }
     } else {
         float x = P.x, z = P.z;
-        float y = groundAt(x, z);
-        float sx = std::fabs(world_.height(x + 0.7f, z) - world_.height(x - 0.7f, z));
-        float sz = std::fabs(world_.height(x, z + 0.7f) - world_.height(x, z - 0.7f));
-        if (sx > 0.8f || sz > 0.8f) ok = false;
-        for (const Placed& p : placed_) {
-            if (kPlace[p.def].kind != PK_FREE) continue;
-            float dx = p.x - x, dz = p.z - z;
-            float rr = kPlace[p.def].colR + pd.colR;
-            if (dx * dx + dz * dz < rr * rr) ok = false;
+        float yaw = -yaw_ + (float)(buildFlip_ & 3) * kPi * 0.5f;
+        if (pd.ramp) {
+            x = std::round(P.x);
+            z = std::round(P.z);
+            yaw = std::round(-yaw_ / (kPi * 0.5f)) * kPi * 0.5f + (float)(buildFlip_ & 3) * kPi * 0.5f;
         }
-        g.x = x; g.y = y; g.z = z; g.yaw = -yaw_ + (float)(buildFlip_ & 3) * kPi * 0.5f;
+        float y = level > 0 ? planeY : groundAt(x, z, ref + 0.6f);
+        if (level == 0) {
+            float sx = std::fabs(world_.height(x + 0.7f, z) - world_.height(x - 0.7f, z));
+            float sz = std::fabs(world_.height(x, z + 0.7f) - world_.height(x, z - 0.7f));
+            if ((sx > 0.8f || sz > 0.8f) && !pd.ramp) ok = false;
+        }
+        for (const Placed& p : placed_) {
+            const PlaceDef& q = kPlace[p.def];
+            if (q.kind != PK_FREE) continue;
+            float dx = p.x - x, dz = p.z - z;
+            float rr = pd.ramp || q.ramp ? 2.2f : q.colR + pd.colR;
+            if (std::fabs(p.y - y) < 1.5f && dx * dx + dz * dz < rr * rr) ok = false;
+        }
+        g.x = x; g.y = y; g.z = z; g.yaw = yaw;
     }
     ghost_ = g;
     ghostOn_ = true;
@@ -526,8 +615,8 @@ void Game::collidePlaced(float& x, float& z, float radius) const {
         struct Box { float cx, cz, hx, hz; };
         Box boxes[2];
         int nb = 0;
-        if (pd.coll == CK_WALL) boxes[nb++] = {0.f, -0.11f, 1.0f, 0.2f};
-        else if (pd.coll == CK_DOOR) { boxes[nb++] = {-0.78f, -0.11f, 0.23f, 0.2f}; boxes[nb++] = {0.78f, -0.11f, 0.23f, 0.2f}; }
+        if (pd.coll == CK_WALL) boxes[nb++] = {0.f, -0.005f, 1.0f, 0.31f};
+        else if (pd.coll == CK_DOOR) { boxes[nb++] = {-0.81f, -0.005f, 0.19f, 0.31f}; boxes[nb++] = {0.81f, -0.005f, 0.19f, 0.31f}; }
         else boxes[nb++] = {0.f, 0.f, 1.0f, 0.12f};
         for (int i = 0; i < nb; i++) {
             const Box& b = boxes[i];

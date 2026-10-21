@@ -89,6 +89,8 @@ Wall_UnevenBrick_Door_Flat
 Wall_UnevenBrick_Window_Wide_Flat
 Prop_WoodenFence_Single
 Roof_Wooden_2x1
+Roof_Wooden_2x1_Middle
+Stair_Interior_Solid
 Bonfire
 Bonfire_Fire
 WoodLog
@@ -100,3 +102,13 @@ WaterBottle_1
 Can_Closed
 FirstAidKit
 Backpack
+Animal_Wolf
+Animal_WolfWhite
+Animal_Bear
+Animal_Deer
+Animal_Stag
+Animal_Doe
+Animal_Boar
+Animal_Rabbit
+Animal_Fox
+Animal_Cow

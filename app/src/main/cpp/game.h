@@ -17,6 +17,22 @@ struct Placed {
     float x, y, z, yaw;
 };
 
+struct Animal {
+    int type = 0;
+    int model = -1;
+    float x = 0, y = 0, z = 0, yaw = 0;
+    float hp = 1.f;
+    int state = 0;
+    float timer = 0.f;
+    float tx = 0, tz = 0;
+    float phase = 0.f;
+    float atkCd = 0.f;
+    float hurt = 0.f;
+    float speed = 0.f;
+    float scale = 1.f;
+    bool angry = false;
+};
+
 struct Popup {
     char text[32];
     float t;
@@ -95,9 +111,17 @@ private:
     bool craft(int recipe);
     bool cook();
     bool nearCampfire(float radius) const;
-    float groundAt(float x, float z) const;
-    float floorTop(float x, float z) const;
+    float groundAt(float x, float z, float ref) const;
+    float floorTop(float x, float z, float ref) const;
     bool aimGround(V3& out) const;
+    bool aimPlane(float y, V3& out) const;
+    void updateAnimals(float dt);
+    void spawnAnimal(int type, float x, float z);
+    void trySpawn();
+    bool animalRay(int& idx, float& t) const;
+    bool hitAnimal(int idx, float dmg);
+    void updateDynamic();
+    void killAnimal(int idx);
     void computeGhost();
     bool placeGhost();
     bool removeAimed();
@@ -152,6 +176,7 @@ private:
     float actCX_ = 0, actCY_ = 0, actR_ = 0;
     float gearCX_ = 0, gearCY_ = 0, gearR_ = 0;
     float bagCX_ = 0, bagCY_ = 0, buildCX_ = 0, buildCY_ = 0, topR_ = 0;
+    float lvlUpCX_ = 0, lvlUpCY_ = 0, lvlDnCX_ = 0, lvlDnCY_ = 0;
     float rotCX_ = 0, rotCY_ = 0, delCX_ = 0, delCY_ = 0, cancelCX_ = 0, cancelCY_ = 0, subR_ = 0;
     float u_ = 1.f;
 
@@ -184,6 +209,13 @@ private:
     bool buildActive_ = false;
     int buildPiece_ = 0;
     int buildFlip_ = 0;
+    int buildLevel_ = 0;
+    std::vector<Animal> animals_;
+    std::vector<PropInst> dyn_;
+    float spawnTimer_ = 0.f;
+    int animalIdx_ = -1;
+    float animalDist_ = 99.f;
+    int mSword_ = -1;
     PropInst ghost_{};
     bool ghostOn_ = false, ghostValid_ = false;
     int ghostDef_ = -1;

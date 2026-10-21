@@ -707,6 +707,16 @@ void Renderer::collect(const Camera& cam, const Frustum& fr, ChunkManager& cm) {
             lists_.add(((size_t)e.model * 2) * 3, GPUInst{e.x, e.y, e.z, e.s, e.yaw, e.tint});
         }
     }
+    if (dynamic_) {
+        for (const PropInst& e : *dynamic_) {
+            if (e.s <= 0.001f) continue;
+            float dx = e.x - cam.pos.x, dz = e.z - cam.pos.z;
+            if (dx * dx + dz * dz > 140.f * 140.f) continue;
+            const ModelDef& md = pak_->models[e.model];
+            if (!frustumSphere(fr, e.x, e.y + md.cy * e.s, e.z, md.radius * e.s)) continue;
+            lists_.add(((size_t)e.model * 2) * 3, GPUInst{e.x, e.y, e.z, e.s, e.yaw, e.tint});
+        }
+    }
     for (const auto& kv : cm.chunks()) {
         const Chunk& c = kv.second;
         float x0 = (float)(c.cx * CHUNK_SIZE), z0 = (float)(c.cz * CHUNK_SIZE);

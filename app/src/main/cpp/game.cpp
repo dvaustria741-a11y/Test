@@ -140,6 +140,7 @@ bool Game::initGL(int w, int h, const char* glRenderer) {
     glReady_ = true;
     applyQuality(tier);
     rend_.setExtras(&extras_);
+    rend_.setDynamic(&dyn_);
     screen_ = S_SPLASH;
     screenT_ = 0;
     trans_ = 0;
@@ -202,6 +203,10 @@ void Game::layout() {
     delCY_ = H - 350.f * u_;
     cancelCX_ = W - 95.f * u_;
     cancelCY_ = H - 420.f * u_;
+    lvlUpCX_ = W - 590.f * u_;
+    lvlUpCY_ = H - 480.f * u_;
+    lvlDnCX_ = W - 590.f * u_;
+    lvlDnCY_ = H - 340.f * u_;
 }
 
 void Game::slotRect(int i, float& x, float& y, float& w, float& h) const {
@@ -331,6 +336,8 @@ void Game::touch(int action, int id, float x, float y) {
             if (hitCircle(x, y, rotCX_, rotCY_, subR_ * 1.15f)) { buildFlip_++; return; }
             if (hitCircle(x, y, delCX_, delCY_, subR_ * 1.15f)) { removeAimed(); return; }
             if (hitCircle(x, y, cancelCX_, cancelCY_, subR_ * 1.15f)) { buildActive_ = false; return; }
+            if (hitCircle(x, y, lvlUpCX_, lvlUpCY_, subR_ * 1.15f)) { buildLevel_ = std::min(3, buildLevel_ + 1); return; }
+            if (hitCircle(x, y, lvlDnCX_, lvlDnCY_, subR_ * 1.15f)) { buildLevel_ = std::max(0, buildLevel_ - 1); return; }
         }
         if (hitCircle(x, y, actCX_, actCY_, actR_ * 1.15f)) {
             t->role = R_ACT;
@@ -422,7 +429,7 @@ void Game::updatePlay(float dt) {
     cm_->collide(nx, nz, 0.45f);
     collidePlaced(nx, nz, 0.45f);
     pos_.x = nx; pos_.z = nz;
-    float ground = groundAt(pos_.x, pos_.z);
+    float ground = groundAt(pos_.x, pos_.z, pos_.y);
     if (jumpReq_ && onGround_) { vy_ = 7.2f; onGround_ = false; }
     jumpReq_ = false;
     if (onGround_) {
@@ -505,6 +512,7 @@ void Game::frame() {
     Atmos atm;
     computeAtmos(atm);
     rend_.setAtmos(atm);
+    updateDynamic();
 
     switch (screen_) {
         case S_SPLASH:
@@ -528,6 +536,7 @@ void Game::frame() {
         case S_PLAY: {
             updatePlay(dt);
             updateSurvival(dt);
+            updateAnimals(dt);
             adaptQuality(dt);
             Camera cam = playCamera();
             updateTarget();

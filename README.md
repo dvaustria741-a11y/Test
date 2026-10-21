@@ -9,12 +9,12 @@ Animated intro and loading screen, then the main menu over a slowly orbiting vie
 world (PLAY, SETTINGS, QUIT). In game, the gear opens the pause menu (RESUME, SETTINGS, MAIN MENU).
 
 ## Survival loop
-- Walk up to trees, rocks, pebbles and mushrooms. The crosshair turns yellow when something is in reach. Hold HIT to chop or mine.
-- Bare hands work (slowly). Craft an AXE and PICKAXE in the BAG for faster work.
-- Craft a CAMPFIRE, WORKBENCH, BED and CHEST and place them with PLACE. Cook mushrooms next to a campfire.
-- MAKE opens the build menu: wood and stone floors, walls, door and window walls, fence, roof. Pieces snap to a 2 m grid, TURN flips them, DEL removes (full refund).
-- Hunger drains over time, starving costs health, eating heals. A full day/night cycle runs (about 14 min); sleep in a bed at night to skip to morning.
-- Everything is saved automatically (position, inventory, built pieces, chopped trees).
+- Walk up to trees, rocks, pebbles and mushrooms. The crosshair turns yellow when something is in reach. Hold HIT to chop or mine. Bare hands work (slowly).
+- BAG: inventory, crafting (axe, pickaxe, sword, torch, campfire, workbench, bed, chest) and cooking next to a campfire.
+- MAKE: build menu. Solid wood and stone walls (door and window variants), floors with foundations, fence, roof, roof ridge and a full-storey staircase. Pieces snap to a 2 m grid. TURN flips, DEL removes with a full refund, UP and DOWN raise the build level by one storey so you can put a second floor on top of the walls.
+- Roofs: place ROOF pieces on the outer wall edges (TURN picks which side they cover) and ROOF RIDGE on the middle line.
+- Animals: deer, rabbits, cows and foxes wander (flee when approached). Boars and bears fight back. Wolves hunt at night. Torches and campfires scare wolves and bears. Kill animals for raw meat and cook it.
+- Hunger drains, starving costs health, a day/night cycle runs (about 14 min), sleep in a bed at night. Everything is saved automatically.
 
 ## Controls
 - Left joystick (fixed by default, floating in Settings), drag anywhere else to look
@@ -42,3 +42,9 @@ publishes it as the `latest` pre-release plus a workflow artifact.
 `app/src/main/assets/props.pak` and `tex/*.ntx` are generated from the original glTF and
 PNG packs by `tools/pack_assets.py` (mesh LODs via meshoptimizer, ETC2 textures with
 mipmaps). Kit license: see the original `License_Standard.txt`.
+
+## Rebuilding the asset pack
+```
+assimp export EverythingLibrary_Animals_001.fbx Library.gltf
+python tools/pack_assets.py --animals-gltf Library.gltf [other source dirs, see --help]
+```

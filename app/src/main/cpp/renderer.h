@@ -92,6 +92,7 @@ public:
     void setAtmos(const Atmos& a) { atmos_ = a; }
     void setLights(const PLight* l, int n) { nLights_ = n > 2 ? 2 : n; for (int i = 0; i < 2; i++) lights_[i] = i < nLights_ ? l[i] : PLight(); }
     void setExtras(const std::vector<PropInst>* v) { extras_ = v; }
+    void setDynamic(const std::vector<PropInst>* v) { dynamic_ = v; }
     void setGhost(bool on, const PropInst& p, float r, float g, float b) { ghostOn_ = on; ghost_ = p; ghostCol_[0] = r; ghostCol_[1] = g; ghostCol_[2] = b; }
     void setViewModel(const ViewModelState& v) { vm_ = v; }
     void uiBegin();
@@ -137,6 +138,7 @@ private:
     PLight lights_[2];
     int nLights_ = 0;
     const std::vector<PropInst>* extras_ = nullptr;
+    const std::vector<PropInst>* dynamic_ = nullptr;
     bool ghostOn_ = false;
     PropInst ghost_{};
     float ghostCol_[3] = {0, 1, 0};
